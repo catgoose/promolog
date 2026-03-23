@@ -1,0 +1,157 @@
+name: CI and Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-main
+  cancel-in-progress: false
+
+jobs:
+  ci-release:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message || '', '[skip ci]') }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build and test
+        run: make ci
+
+      - name: Save go.mod and go.sum
+        run: |
+          cp go.mod /tmp/go.mod.bak
+          cp go.sum /tmp/go.sum.bak
+
+      - name: Get latest Go version
+        id: go
+        run: |
+          version=$(curl -sL https://go.dev/dl/?mode=json | jq -r '.[0].version' | sed 's/^go//')
+          echo "version=$version" >> $GITHUB_OUTPUT
+
+      - name: Upgrade Go version
+        run: go mod edit -go=${{ steps.go.outputs.version }}
+
+      - name: Set up Go (upgraded)
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ steps.go.outputs.version }}
+          cache: true
+
+      - name: Update dependencies
+        run: |
+          go get -u ./...
+          go mod tidy
+
+      - name: Build and test (updated)
+        run: make ci
+
+      - name: Check for dependency changes
+        id: check-deps
+        run: |
+          git add go.mod go.sum
+          if git diff --staged --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit dependency changes
+        if: steps.check-deps.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update Go dependencies and Go version [skip ci]"
+          git pull --rebase origin main
+          git push origin main
+
+      - name: Check for releasable commits
+        id: check-release
+        run: |
+          prev_tag=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n 1)
+          if [ -z "$prev_tag" ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+          else
+            # Only release if there are non-chore, non-skip-ci commits since last tag
+            count=$(git log "$prev_tag"..HEAD --pretty=format:"%s" | grep -cvE '^\s*(chore:|docs:|\[skip ci\])' || true)
+            if [ "$count" -gt 0 ]; then
+              echo "should_release=true" >> $GITHUB_OUTPUT
+            else
+              echo "should_release=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Set up Git for tag
+        if: steps.check-release.outputs.should_release == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch tags
+        if: steps.check-release.outputs.should_release == 'true'
+        run: git fetch --tags
+
+      - name: Get latest tag
+        if: steps.check-release.outputs.should_release == 'true'
+        id: get_tag
+        run: |
+          latest_tag=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n 1 | sed 's/^v//')
+          if [ -z "$latest_tag" ]; then
+            latest_tag="0.0.0"
+          fi
+          echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
+
+      - name: Bump patch version
+        if: steps.check-release.outputs.should_release == 'true'
+        id: bump_version
+        run: |
+          latest="${{ steps.get_tag.outputs.latest_tag }}"
+          IFS='.' read -r major minor patch <<<"$latest"
+          if [ -z "$major" ]; then major=0; fi
+          if [ -z "$minor" ]; then minor=0; fi
+          if [ -z "$patch" ]; then patch=0; fi
+          patch=$((patch+1))
+          new_tag="v$major.$minor.$patch"
+          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        if: steps.check-release.outputs.should_release == 'true'
+        id: changelog
+        run: |
+          echo "## Changes" >> release_notes.md
+          prev_tag="v${{ steps.get_tag.outputs.latest_tag }}"
+          if git rev-parse "$prev_tag" >/dev/null 2>&1; then
+            git log "$prev_tag"..HEAD --pretty=format:"- %s" | grep -v "\[skip ci\]" >> release_notes.md || true
+          else
+            git log --pretty=format:"- %s" | grep -v "\[skip ci\]" >> release_notes.md || true
+          fi
+          echo "" >> release_notes.md
+          echo "Go version: $(grep '^go ' go.mod | awk '{print $2}')" >> release_notes.md
+
+      - name: Create tag
+        if: steps.check-release.outputs.should_release == 'true'
+        run: |
+          git tag ${{ steps.bump_version.outputs.new_tag }}
+          git push origin ${{ steps.bump_version.outputs.new_tag }}
+
+      - name: Create GitHub Release
+        if: steps.check-release.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump_version.outputs.new_tag }}
+          body_path: release_notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
