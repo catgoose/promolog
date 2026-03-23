@@ -218,7 +218,7 @@ func (s *Store) DeleteTrace(ctx context.Context, requestID string) error {
 }
 
 // StartCleanup runs a background goroutine that deletes entries older than ttl.
-func (s *Store) StartCleanup(ctx context.Context, ttl time.Duration, interval time.Duration) {
+func (s *Store) StartCleanup(ctx context.Context, ttl, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -236,18 +236,16 @@ func (s *Store) StartCleanup(ctx context.Context, ttl time.Duration, interval ti
 
 // --- WHERE builders ---
 
-func buildWhere(f TraceFilter) (string, []any) {
+func buildWhere(f TraceFilter) (where string, args []any) {
 	var clauses []string
-	var args []any
 	addSearch(&clauses, &args, f)
 	addStatus(&clauses, &args, f)
 	addMethod(&clauses, &args, f)
 	return whereString(clauses), args
 }
 
-func buildWhereExcluding(f TraceFilter, exclude string) (string, []any) {
+func buildWhereExcluding(f TraceFilter, exclude string) (where string, args []any) {
 	var clauses []string
-	var args []any
 	addSearch(&clauses, &args, f)
 	if exclude != "status" {
 		addStatus(&clauses, &args, f)
