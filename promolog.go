@@ -15,7 +15,9 @@ import (
 var ErrDuplicateTrace = errors.New("promolog: duplicate request ID")
 
 // RequestIDKey is the context key used to associate a request ID with a context.
-// Set this in your middleware: context.WithValue(ctx, promolog.RequestIDKey, "req-123")
+// CorrelationMiddleware sets this automatically. For custom setups:
+//
+//	ctx = context.WithValue(ctx, promolog.RequestIDKey, "req-123")
 type requestIDKeyType struct{}
 
 var RequestIDKey = requestIDKeyType{}
