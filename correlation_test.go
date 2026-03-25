@@ -21,7 +21,7 @@ func TestCorrelationMiddleware_GeneratesRequestID(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -38,7 +38,7 @@ func TestCorrelationMiddleware_ReusesIncomingRequestID(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	req.Header.Set("X-Request-ID", incoming)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -58,7 +58,7 @@ func TestCorrelationMiddleware_InitializesBuffer(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -72,7 +72,7 @@ func TestCorrelationMiddleware_CallsNext(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -81,7 +81,7 @@ func TestCorrelationMiddleware_CallsNext(t *testing.T) {
 }
 
 func TestGetRequestID_EmptyWithoutMiddleware(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
 	assert.Empty(t, GetRequestID(req.Context()))
 }
 
