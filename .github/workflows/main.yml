@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: pipeline-${{ github.ref }}
@@ -168,3 +169,28 @@ jobs:
           body_path: release_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Notify on failure ───────────────────────────────────────────────────
+  notify-failure:
+    if: ${{ failure() }}
+    needs: [update-deps, test, release]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Create issue on pipeline failure
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Pipeline failure: ${{ github.workflow }} (#${{ github.run_number }})" \
+            --label "ci" \
+            --body "$(cat <<EOF
+          **Workflow:** \`${{ github.workflow }}\`
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Branch:** \`${{ github.ref_name }}\`
+          **Commit:** \`${{ github.sha }}\`
+          **Triggered by:** ${{ github.actor }}
+          EOF
+          )"
+        env:
+          GH_TOKEN: ${{ github.token }}
