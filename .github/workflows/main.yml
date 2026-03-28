@@ -178,19 +178,37 @@ jobs:
     permissions:
       issues: write
     steps:
-      - name: Create issue on pipeline failure
+      - name: Notify CI failure
         run: |
-          gh issue create \
-            --repo "${{ github.repository }}" \
-            --title "Pipeline failure: ${{ github.workflow }} (#${{ github.run_number }})" \
-            --label "ci" \
-            --body "$(cat <<EOF
-          **Workflow:** \`${{ github.workflow }}\`
+          BODY="**Workflow:** \`${{ github.workflow }}\`
           **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           **Branch:** \`${{ github.ref_name }}\`
           **Commit:** \`${{ github.sha }}\`
-          **Triggered by:** ${{ github.actor }}
-          EOF
-          )"
+          **Triggered by:** ${{ github.actor }}"
+
+          EXISTING=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --label "ci" \
+            --state all \
+            --limit 1 \
+            --json number,state \
+            --jq '.[0]')
+
+          if [ -z "$EXISTING" ] || [ "$EXISTING" = "null" ]; then
+            gh issue create \
+              --repo "${{ github.repository }}" \
+              --title "Pipeline failure: ${{ github.workflow }}" \
+              --label "ci" \
+              --body "$BODY"
+          else
+            NUMBER=$(echo "$EXISTING" | jq -r '.number')
+            STATE=$(echo "$EXISTING" | jq -r '.state')
+            if [ "$STATE" = "CLOSED" ]; then
+              gh issue reopen "$NUMBER" --repo "${{ github.repository }}"
+            fi
+            gh issue comment "$NUMBER" \
+              --repo "${{ github.repository }}" \
+              --body "$BODY"
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
