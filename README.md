@@ -1,5 +1,8 @@
 # promolog
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/catgoose/promolog.svg)](https://pkg.go.dev/github.com/catgoose/promolog)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Per-request log capture with promote-on-error semantics for Go.
 
 During normal requests, log records are buffered in memory and discarded.
@@ -60,7 +63,7 @@ err := store.Promote(ctx, promolog.ErrorTrace{
     UserAgent:  r.UserAgent(),
     RemoteIP:   r.RemoteAddr,
     UserID:     userID,
-    Entries:    buf.Snapshot(),
+    Entries:    buf.Entries(),
 })
 ```
 
