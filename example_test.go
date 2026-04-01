@@ -28,7 +28,7 @@ func ExampleNewHandler() {
 	logger.DebugContext(ctx, "loaded 42 rows")
 
 	buf := promolog.GetBuffer(ctx)
-	fmt.Println(len(buf.Entries()))
+	fmt.Println(len(buf.Entries))
 	// Output: 2
 }
 
@@ -262,7 +262,7 @@ func ExampleGetBuffer() {
 		Message: "manual entry",
 	})
 
-	fmt.Println(len(buf.Entries()))
+	fmt.Println(len(buf.Entries))
 
 	// Without a buffer, GetBuffer returns nil.
 	empty := promolog.GetBuffer(context.Background())
