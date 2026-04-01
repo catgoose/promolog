@@ -1,7 +1,8 @@
 // Package promolog provides per-request error trace capture with
 // promote-on-error semantics. Each request buffers its slog records locally;
-// only when an error occurs is the buffer promoted to a SQLite-backed Store
-// for later retrieval.
+// only when an error occurs is the buffer promoted to a Storer implementation
+// for later retrieval. The core package has zero external dependencies.
+// See github.com/catgoose/promolog/sqlite for a SQLite-backed Storer.
 package promolog
 
 import (
@@ -34,23 +35,30 @@ type Entry struct {
 // It is safe for concurrent use.
 type Buffer struct {
 	mu      sync.Mutex
-	Entries []Entry
+	entries []Entry
 }
 
 // Append adds an entry to the buffer. It is safe for concurrent use.
 func (b *Buffer) Append(e Entry) {
 	b.mu.Lock()
-	b.Entries = append(b.Entries, e)
+	b.entries = append(b.entries, e)
 	b.mu.Unlock()
 }
 
-// Snapshot returns a copy of the current entries. It is safe for concurrent use.
-func (b *Buffer) Snapshot() []Entry {
+// Entries returns a copy of the current entries. It is safe for concurrent use.
+func (b *Buffer) Entries() []Entry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	cp := make([]Entry, len(b.Entries))
-	copy(cp, b.Entries)
+	cp := make([]Entry, len(b.entries))
+	copy(cp, b.entries)
 	return cp
+}
+
+// Snapshot returns a copy of the current entries. It is safe for concurrent use.
+//
+// Deprecated: Use Entries instead.
+func (b *Buffer) Snapshot() []Entry {
+	return b.Entries()
 }
 
 type bufferKey struct{}
@@ -121,6 +129,3 @@ type Storer interface {
 	DeleteTrace(ctx context.Context, requestID string) error
 	StartCleanup(ctx context.Context, ttl time.Duration, interval time.Duration)
 }
-
-// compile-time check
-var _ Storer = (*Store)(nil)

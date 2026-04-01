@@ -1,4 +1,5 @@
-package promolog
+// Package sqlite provides a SQLite-backed implementation of promolog.Storer.
+package sqlite
 
 import (
 	"context"
@@ -7,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/catgoose/promolog"
 )
 
 const schema = `CREATE TABLE IF NOT EXISTS error_traces (
@@ -28,8 +31,11 @@ CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_a
 // Store is a SQLite-backed store of error traces.
 type Store struct {
 	db        *sql.DB
-	onPromote func(TraceSummary)
+	onPromote func(promolog.TraceSummary)
 }
+
+// compile-time check
+var _ promolog.Storer = (*Store)(nil)
 
 // NewStore creates a Store backed by the given database connection.
 func NewStore(db *sql.DB) *Store {
@@ -43,21 +49,21 @@ func (s *Store) InitSchema() error {
 }
 
 // SetOnPromote registers a callback invoked after each successful promote.
-func (s *Store) SetOnPromote(fn func(TraceSummary)) {
+func (s *Store) SetOnPromote(fn func(promolog.TraceSummary)) {
 	s.onPromote = fn
 }
 
 // Promote persists an error trace to the database.
-func (s *Store) Promote(ctx context.Context, trace ErrorTrace) error {
+func (s *Store) Promote(ctx context.Context, trace promolog.ErrorTrace) error {
 	return s.promoteAt(ctx, trace, time.Now().UTC())
 }
 
 // PromoteAt persists an error trace with a specific timestamp.
-func (s *Store) PromoteAt(ctx context.Context, trace ErrorTrace, createdAt time.Time) error {
+func (s *Store) PromoteAt(ctx context.Context, trace promolog.ErrorTrace, createdAt time.Time) error {
 	return s.promoteAt(ctx, trace, createdAt)
 }
 
-func (s *Store) promoteAt(ctx context.Context, trace ErrorTrace, createdAt time.Time) error {
+func (s *Store) promoteAt(ctx context.Context, trace promolog.ErrorTrace, createdAt time.Time) error {
 	data, err := json.Marshal(trace.Entries)
 	if err != nil {
 		return fmt.Errorf("marshal entries: %w", err)
@@ -76,10 +82,10 @@ func (s *Store) promoteAt(ctx context.Context, trace ErrorTrace, createdAt time.
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return ErrDuplicateTrace
+		return promolog.ErrDuplicateTrace
 	}
 	if s.onPromote != nil {
-		s.onPromote(TraceSummary{
+		s.onPromote(promolog.TraceSummary{
 			RequestID:  trace.RequestID,
 			ErrorChain: trace.ErrorChain,
 			StatusCode: trace.StatusCode,
@@ -94,12 +100,12 @@ func (s *Store) promoteAt(ctx context.Context, trace ErrorTrace, createdAt time.
 }
 
 // Get returns the full error trace for a request ID, or nil if not found.
-func (s *Store) Get(ctx context.Context, requestID string) (*ErrorTrace, error) {
+func (s *Store) Get(ctx context.Context, requestID string) (*promolog.ErrorTrace, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, created_at
 		FROM error_traces WHERE request_id = ?`, requestID)
 
-	var t ErrorTrace
+	var t promolog.ErrorTrace
 	var entriesJSON string
 	err := row.Scan(&t.RequestID, &t.ErrorChain, &t.StatusCode, &t.Route,
 		&t.Method, &t.UserAgent, &t.RemoteIP, &t.UserID, &entriesJSON, &t.CreatedAt)
@@ -116,7 +122,7 @@ func (s *Store) Get(ctx context.Context, requestID string) (*ErrorTrace, error) 
 }
 
 // ListTraces returns a page of trace summaries matching the given filters.
-func (s *Store) ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, int, error) {
+func (s *Store) ListTraces(ctx context.Context, f promolog.TraceFilter) ([]promolog.TraceSummary, int, error) {
 	if f.Page < 1 {
 		f.Page = 1
 	}
@@ -163,9 +169,9 @@ func (s *Store) ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, 
 	}
 	defer rows.Close()
 
-	var result []TraceSummary
+	var result []promolog.TraceSummary
 	for rows.Next() {
-		var ts TraceSummary
+		var ts promolog.TraceSummary
 		if err := rows.Scan(&ts.RequestID, &ts.ErrorChain, &ts.StatusCode,
 			&ts.Route, &ts.Method, &ts.RemoteIP, &ts.UserID, &ts.CreatedAt); err != nil {
 			return nil, 0, err
@@ -176,8 +182,8 @@ func (s *Store) ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, 
 }
 
 // AvailableFilters returns distinct status codes and methods for filter dropdowns.
-func (s *Store) AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error) {
-	var opts FilterOptions
+func (s *Store) AvailableFilters(ctx context.Context, f promolog.TraceFilter) (promolog.FilterOptions, error) {
+	var opts promolog.FilterOptions
 
 	// Status codes (filtered by search + method, not status itself)
 	sw, sa := buildWhereExcluding(f, "status")
@@ -236,7 +242,7 @@ func (s *Store) StartCleanup(ctx context.Context, ttl, interval time.Duration) {
 
 // --- WHERE builders ---
 
-func buildWhere(f TraceFilter) (where string, args []any) {
+func buildWhere(f promolog.TraceFilter) (where string, args []any) {
 	var clauses []string
 	addSearch(&clauses, &args, f)
 	addStatus(&clauses, &args, f)
@@ -244,7 +250,7 @@ func buildWhere(f TraceFilter) (where string, args []any) {
 	return whereString(clauses), args
 }
 
-func buildWhereExcluding(f TraceFilter, exclude string) (where string, args []any) {
+func buildWhereExcluding(f promolog.TraceFilter, exclude string) (where string, args []any) {
 	var clauses []string
 	addSearch(&clauses, &args, f)
 	if exclude != "status" {
@@ -264,7 +270,7 @@ func escapeLike(s string) string {
 	return s
 }
 
-func addSearch(clauses *[]string, args *[]any, f TraceFilter) {
+func addSearch(clauses *[]string, args *[]any, f promolog.TraceFilter) {
 	if f.Q == "" {
 		return
 	}
@@ -276,7 +282,7 @@ func addSearch(clauses *[]string, args *[]any, f TraceFilter) {
 	}
 }
 
-func addStatus(clauses *[]string, args *[]any, f TraceFilter) {
+func addStatus(clauses *[]string, args *[]any, f promolog.TraceFilter) {
 	if f.Status == "" {
 		return
 	}
@@ -294,7 +300,7 @@ func addStatus(clauses *[]string, args *[]any, f TraceFilter) {
 	}
 }
 
-func addMethod(clauses *[]string, args *[]any, f TraceFilter) {
+func addMethod(clauses *[]string, args *[]any, f promolog.TraceFilter) {
 	if f.Method != "" {
 		*clauses = append(*clauses, "method = ?")
 		*args = append(*args, f.Method)
