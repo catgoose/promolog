@@ -35,7 +35,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 
 ```go
 // Success: logs buffered in memory, then discarded. Zero noise.
-// Error: entire request trace promoted to SQLite. Full context.
+// Error: entire request trace promoted to storage. Full context.
 logger := slog.New(promolog.NewHandler(slog.Default().Handler()))
 
 // In your error handler:
@@ -50,14 +50,22 @@ store.Promote(ctx, promolog.ErrorTrace{
 ```
 
 During normal requests, log records are buffered in memory and discarded.
-When a request errors, the entire buffer is promoted to a SQLite store for
+When a request errors, the entire buffer is promoted to a store for
 later inspection. You get full request context -- every log line that led to
 the failure -- without the noise of successful requests.
 
 ## Install
 
+The core library has zero external dependencies:
+
 ```bash
 go get github.com/catgoose/promolog
+```
+
+For the SQLite-backed store:
+
+```bash
+go get github.com/catgoose/promolog/sqlite
 ```
 
 > The server does not remember you. The server has already forgotten you. The server has moved on.
@@ -75,7 +83,7 @@ Unless you fail. Then the server remembers everything.
 
 ```
 request in --> buffer logs --> success? discard
-                          \-> error?   promote to SQLite
+                          \-> error?   promote to store
 ```
 
 ## Quick start
@@ -86,12 +94,13 @@ import (
     "log/slog"
 
     "github.com/catgoose/promolog"
+    "github.com/catgoose/promolog/sqlite"
     _ "github.com/mattn/go-sqlite3"
 )
 
 // 1. Set up the store
 db, _ := sql.Open("sqlite3", "errors.db")
-store := promolog.NewStore(db)
+store := sqlite.NewStore(db)
 store.InitSchema()
 store.StartCleanup(ctx, 90*24*time.Hour, time.Hour)
 
@@ -122,6 +131,26 @@ err := store.Promote(ctx, promolog.ErrorTrace{
 > -- Layman Grug
 
 Promolog says "no" to log noise. Successful requests produce zero output. Failed requests produce everything.
+
+## Bring your own store
+
+The core library defines a `Storer` interface. The SQLite implementation lives
+in `github.com/catgoose/promolog/sqlite`, but you can implement `Storer` with
+any backend (Postgres, Redis, in-memory, etc.):
+
+```go
+type Storer interface {
+    InitSchema() error
+    SetOnPromote(fn func(TraceSummary))
+    Promote(ctx context.Context, trace ErrorTrace) error
+    PromoteAt(ctx context.Context, trace ErrorTrace, createdAt time.Time) error
+    Get(ctx context.Context, requestID string) (*ErrorTrace, error)
+    ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, int, error)
+    AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error)
+    DeleteTrace(ctx context.Context, requestID string) error
+    StartCleanup(ctx context.Context, ttl time.Duration, interval time.Duration)
+}
+```
 
 ## Querying traces
 
@@ -174,30 +203,15 @@ store.SetOnPromote(func(ts promolog.TraceSummary) {
 
 ## Testing
 
-`Storer` is an interface satisfied by `*Store`, enforced at compile time:
-
-```go
-type Storer interface {
-    InitSchema() error
-    SetOnPromote(fn func(TraceSummary))
-    Promote(ctx context.Context, trace ErrorTrace) error
-    PromoteAt(ctx context.Context, trace ErrorTrace, createdAt time.Time) error
-    Get(ctx context.Context, requestID string) (*ErrorTrace, error)
-    ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, int, error)
-    AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error)
-    DeleteTrace(ctx context.Context, requestID string) error
-    StartCleanup(ctx context.Context, ttl time.Duration, interval time.Duration)
-}
-```
-
-Use it to mock the store in your application tests.
+`Storer` is an interface -- use it to mock the store in your application tests.
 
 ## API reference
 
+### Core (`github.com/catgoose/promolog`) -- zero dependencies
+
 | Type | Description |
 |------|-------------|
-| `Store` | SQLite-backed trace storage |
-| `Storer` | Interface for mocking |
+| `Storer` | Interface for trace persistence (implement or mock) |
 | `Handler` | `slog.Handler` wrapper that captures records into a per-request buffer |
 | `Buffer` | Thread-safe per-request log buffer |
 | `ErrorTrace` | Full error trace with log entries |
@@ -205,6 +219,13 @@ Use it to mock the store in your application tests.
 | `TraceFilter` | Query parameters for `ListTraces` and `AvailableFilters` |
 | `FilterOptions` | Distinct status codes and methods for filter dropdowns |
 | `ErrDuplicateTrace` | Sentinel error for duplicate request IDs |
+
+### SQLite store (`github.com/catgoose/promolog/sqlite`)
+
+| Type | Description |
+|------|-------------|
+| `Store` | SQLite-backed implementation of `promolog.Storer` |
+| `NewStore(db)` | Constructor -- pass a `*sql.DB` opened with a SQLite driver |
 
 ## License
 
