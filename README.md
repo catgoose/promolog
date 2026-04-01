@@ -243,6 +243,51 @@ Promolog amends the teaching: the past is past — unless the request failed. Th
 
 Promolog follows the [dothog design philosophy](https://github.com/catgoose/dothog/blob/main/PHILOSOPHY.md): zero dependencies in the core, interface-driven extensibility, and the server handles state so you don't have to.
 
+## Architecture
+
+### How promolog integrates
+
+```
+  request in ──► middleware ──► handler ──► response
+                    │              │
+                    │  attach      │  slog.Info/Error/etc
+                    │  Buffer +    │  captured by Handler
+                    │  request ID  │         │
+                    │              │         v
+                    │              │    ┌─────────┐
+                    │              │    │ Buffer   │
+                    │              │    │ (memory) │
+                    │              │    └────┬─────┘
+                    │              │         │
+                    │         success?       error?
+                    │           │              │
+                    │         discard      Promote()
+                    │                         │
+                    │                    ┌────v─────┐
+                    │                    │  Store   │
+                    │                    │ (SQLite) │
+                    │                    └──────────┘
+```
+
+### Where promolog fits in the dothog ecosystem
+
+```
+                        ┌──────────────────────────────────────┐
+                        │              dothog app              │
+                        └──────────┬───────────────────────────┘
+                                   │
+          ┌────────────┬───────────┼───────────┬────────────┐
+          │            │           │           │            │
+     ┌────v────┐  ┌────v────┐ ┌───v────┐  ┌───v────┐  ┌───v─────┐
+     │ crooner │  │ porter  │ │fraggle │  │ tavern │  │*promolog*│
+     │  auth   │  │  authz  │ │  sql   │  │  sse   │  │  logs   │
+     └─────────┘  └─────────┘ └────────┘  └────────┘  └─────────┘
+```
+
+Promolog wraps `slog` at the handler level. Every other library logs normally
+through `slog` — promolog captures those records per-request and decides
+whether to keep or discard them based on the outcome.
+
 ## License
 
 MIT
