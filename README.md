@@ -132,6 +132,12 @@ err := store.Promote(ctx, promolog.ErrorTrace{
 
 Promolog says "no" to log noise. Successful requests produce zero output. Failed requests produce everything.
 
+> If you are building something that must evolve — while clients depend on it, while teams change, while requirements shift, while Kevin goes on PTO and comes back and the new Kevin doesn't know the old Kevin's conventions — then you need an architecture that permits change without breaking the contract.
+>
+> -- The Wisdom of the Uniform Interface
+
+Promolog is that architecture for your error traces. When Kevin comes back from PTO, the full request context is waiting in the store.
+
 ## Bring your own store
 
 The core library defines a `Storer` interface. The SQLite implementation lives
@@ -226,6 +232,16 @@ store.SetOnPromote(func(ts promolog.TraceSummary) {
 |------|-------------|
 | `Store` | SQLite-backed implementation of `promolog.Storer` |
 | `NewStore(db)` | Constructor -- pass a `*sql.DB` opened with a SQLite driver |
+
+## Philosophy
+
+> Grug's last teaching: past is already past -- don't debug it. future not here yet -- don't optimize for it. server return html -- this present moment.
+>
+> -- Layman Grug
+
+Promolog amends the teaching: the past is past — unless the request failed. Then the past is exactly what you need, and promolog kept it for you.
+
+Promolog follows the [dothog design philosophy](https://github.com/catgoose/dothog/blob/main/PHILOSOPHY.md): zero dependencies in the core, interface-driven extensibility, and the server handles state so you don't have to.
 
 ## License
 
