@@ -7,6 +7,12 @@
 
 Per-request log capture with promote-on-error semantics for Go.
 
+> past is already past -- don't debug it
+>
+> -- Layman Grug, Dothog Manifesto
+
+Grug was almost right. But when the request fails, the past is exactly what you need. Promolog says: buffer the past, discard it when it doesn't matter, and promote it when it does.
+
 ## Why
 
 **Without promolog:**
@@ -53,6 +59,12 @@ the failure -- without the noise of successful requests.
 ```bash
 go get github.com/catgoose/promolog
 ```
+
+> The server does not remember you. The server has already forgotten you. The server has moved on.
+>
+> -- The Wisdom of the Uniform Interface, Dothog Manifesto
+
+Unless you fail. Then the server remembers everything.
 
 ## How it works
 
@@ -104,6 +116,12 @@ err := store.Promote(ctx, promolog.ErrorTrace{
     Entries:    buf.Entries(),
 })
 ```
+
+> Grug say: "complexity is apex predator." Student say: "how do I defeat the complexity?" Grug say: "no."
+>
+> -- Layman Grug, Dothog Manifesto
+
+Promolog says "no" to log noise. Successful requests produce zero output. Failed requests produce everything.
 
 ## Querying traces
 
