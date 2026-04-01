@@ -7,6 +7,42 @@
 
 Per-request log capture with promote-on-error semantics for Go.
 
+## Why
+
+**Without promolog:**
+
+```go
+// Every request logs everything. 99% of it is noise.
+func handler(w http.ResponseWriter, r *http.Request) {
+    slog.Info("parsing request body")
+    slog.Info("validating input", "field", "email")
+    slog.Info("querying database", "table", "users")
+    // ...request succeeds. These logs are useless.
+    // But when a request FAILS, you wish you had more context.
+    // The error log is one line buried in thousands of success logs.
+    slog.Error("database timeout", "err", err)
+    // Good luck finding the 5 log lines that led to this.
+}
+```
+
+**With promolog:**
+
+```go
+// Success: logs buffered in memory, then discarded. Zero noise.
+// Error: entire request trace promoted to SQLite. Full context.
+logger := slog.New(promolog.NewHandler(slog.Default().Handler()))
+
+// In your error handler:
+buf := promolog.GetBuffer(r.Context())
+store.Promote(ctx, promolog.ErrorTrace{
+    RequestID: requestID,
+    Entries:   buf.Entries(), // every log line from this request
+    Route:     "/api/users",
+    Method:    "GET",
+})
+// Later: store.ListTraces(ctx, promolog.TraceFilter{Q: "timeout"})
+```
+
 During normal requests, log records are buffered in memory and discarded.
 When a request errors, the entire buffer is promoted to a SQLite store for
 later inspection. You get full request context -- every log line that led to
