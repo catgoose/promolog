@@ -3,7 +3,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/catgoose/promolog.svg)](https://pkg.go.dev/github.com/catgoose/promolog)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-![promolog](https://raw.githubusercontent.com/catgoose/screenshots/main/promolog/promolog.png?v=2)
+![promolog](https://raw.githubusercontent.com/catgoose/screenshots/main/promolog/promolog.png)
 
 Per-request log capture with promote-on-error semantics for Go.
 
