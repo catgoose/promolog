@@ -170,6 +170,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ── Close resolved CI issue ─────────────────────────────────────────────
+  close-resolved:
+    if: ${{ success() }}
+    needs: [update-deps, test, release]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close resolved CI issue
+        run: |
+          EXISTING=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --label "ci" \
+            --state open \
+            --limit 1 \
+            --json number \
+            --jq '.[0].number')
+
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            gh issue close "$EXISTING" \
+              --repo "${{ github.repository }}" \
+              --comment "Pipeline succeeded — closing resolved issue.
+
+          **Workflow:** \`${{ github.workflow }}\`
+          **Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          **Branch:** \`${{ github.ref_name }}\`
+          **Commit:** \`${{ github.sha }}\`"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   # ── Notify on failure ───────────────────────────────────────────────────
   notify-failure:
     if: ${{ failure() }}
