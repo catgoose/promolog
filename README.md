@@ -1,5 +1,26 @@
 # promolog
 
+<!--toc:start-->
+
+- [promolog](#promolog)
+  - [Why](#why)
+  - [Install](#install)
+  - [How it works](#how-it-works)
+  - [Quick start](#quick-start)
+  - [Bring your own store](#bring-your-own-store)
+  - [Querying traces](#querying-traces)
+  - [Duplicate handling](#duplicate-handling)
+  - [Promote callback](#promote-callback)
+  - [Testing](#testing)
+  - [API reference](#api-reference)
+    - [Core (`github.com/catgoose/promolog`) -- zero dependencies](#core-githubcomcatgoosepromolog-zero-dependencies)
+    - [SQLite store (`github.com/catgoose/promolog/sqlite`)](#sqlite-store-githubcomcatgoosepromologsqlite)
+  - [Philosophy](#philosophy)
+  - [Architecture](#architecture)
+    - [How promolog integrates](#how-promolog-integrates)
+  - [License](#license)
+  <!--toc:end-->
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/catgoose/promolog.svg)](https://pkg.go.dev/github.com/catgoose/promolog)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -20,14 +41,14 @@ Grug was almost right. But when the request fails, the past is exactly what you 
 ```go
 // Every request logs everything. 99% of it is noise.
 func handler(w http.ResponseWriter, r *http.Request) {
-    slog.Info("parsing request body")
-    slog.Info("validating input", "field", "email")
-    slog.Info("querying database", "table", "users")
-    // ...request succeeds. These logs are useless.
-    // But when a request FAILS, you wish you had more context.
-    // The error log is one line buried in thousands of success logs.
-    slog.Error("database timeout", "err", err)
-    // Good luck finding the 5 log lines that led to this.
+	slog.Info("parsing request body")
+	slog.Info("validating input", "field", "email")
+	slog.Info("querying database", "table", "users")
+	// ...request succeeds. These logs are useless.
+	// But when a request FAILS, you wish you had more context.
+	// The error log is one line buried in thousands of success logs.
+	slog.Error("database timeout", "err", err)
+	// Good luck finding the 5 log lines that led to this.
 }
 ```
 
@@ -41,10 +62,10 @@ logger := slog.New(promolog.NewHandler(slog.Default().Handler()))
 // In your error handler:
 buf := promolog.GetBuffer(r.Context())
 store.Promote(ctx, promolog.ErrorTrace{
-    RequestID: requestID,
-    Entries:   buf.Entries(), // every log line from this request
-    Route:     "/api/users",
-    Method:    "GET",
+	RequestID: requestID,
+	Entries:   buf.Entries(), // every log line from this request
+	Route:     "/api/users",
+	Method:    "GET",
 })
 // Later: store.ListTraces(ctx, promolog.TraceFilter{Q: "timeout"})
 ```
@@ -146,15 +167,15 @@ any backend (Postgres, Redis, in-memory, etc.):
 
 ```go
 type Storer interface {
-    InitSchema() error
-    SetOnPromote(fn func(TraceSummary))
-    Promote(ctx context.Context, trace ErrorTrace) error
-    PromoteAt(ctx context.Context, trace ErrorTrace, createdAt time.Time) error
-    Get(ctx context.Context, requestID string) (*ErrorTrace, error)
-    ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, int, error)
-    AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error)
-    DeleteTrace(ctx context.Context, requestID string) error
-    StartCleanup(ctx context.Context, ttl time.Duration, interval time.Duration)
+	InitSchema() error
+	SetOnPromote(fn func(TraceSummary))
+	Promote(ctx context.Context, trace ErrorTrace) error
+	PromoteAt(ctx context.Context, trace ErrorTrace, createdAt time.Time) error
+	Get(ctx context.Context, requestID string) (*ErrorTrace, error)
+	ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, int, error)
+	AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error)
+	DeleteTrace(ctx context.Context, requestID string) error
+	StartCleanup(ctx context.Context, ttl time.Duration, interval time.Duration)
 }
 ```
 
@@ -166,13 +187,13 @@ trace, err := store.Get(ctx, "req-abc-123")
 
 // List traces with filtering, search, sorting, and pagination
 rows, total, err := store.ListTraces(ctx, promolog.TraceFilter{
-    Q:       "connection",     // search across route, error, request ID, user, IP
-    Status:  "5xx",            // "4xx", "5xx", or exact code like "502"
-    Method:  "POST",           // HTTP method filter
-    Sort:    "StatusCode",     // CreatedAt (default), StatusCode, Route, Method
-    Dir:     "asc",            // asc or desc (default)
-    Page:    1,                // defaults to 1
-    PerPage: 25,               // defaults to 25
+	Q:       "connection", // search across route, error, request ID, user, IP
+	Status:  "5xx",        // "4xx", "5xx", or exact code like "502"
+	Method:  "POST",       // HTTP method filter
+	Sort:    "StatusCode", // CreatedAt (default), StatusCode, Route, Method
+	Dir:     "asc",        // asc or desc (default)
+	Page:    1,            // defaults to 1
+	PerPage: 25,           // defaults to 25
 })
 
 // Get distinct values for building filter dropdowns
@@ -193,7 +214,7 @@ successful inserts.
 ```go
 err := store.Promote(ctx, trace)
 if errors.Is(err, promolog.ErrDuplicateTrace) {
-    // already recorded
+	// already recorded
 }
 ```
 
@@ -203,7 +224,7 @@ Register a callback for real-time notifications (e.g. SSE, webhooks):
 
 ```go
 store.SetOnPromote(func(ts promolog.TraceSummary) {
-    log.Printf("new error: %s %d %s", ts.RequestID, ts.StatusCode, ts.Route)
+	log.Printf("new error: %s %d %s", ts.RequestID, ts.StatusCode, ts.Route)
 })
 ```
 
@@ -215,22 +236,22 @@ store.SetOnPromote(func(ts promolog.TraceSummary) {
 
 ### Core (`github.com/catgoose/promolog`) -- zero dependencies
 
-| Type | Description |
-|------|-------------|
-| `Storer` | Interface for trace persistence (implement or mock) |
-| `Handler` | `slog.Handler` wrapper that captures records into a per-request buffer |
-| `Buffer` | Thread-safe per-request log buffer |
-| `ErrorTrace` | Full error trace with log entries |
-| `TraceSummary` | Lightweight trace without log entries (for list views) |
-| `TraceFilter` | Query parameters for `ListTraces` and `AvailableFilters` |
-| `FilterOptions` | Distinct status codes and methods for filter dropdowns |
-| `ErrDuplicateTrace` | Sentinel error for duplicate request IDs |
+| Type                | Description                                                            |
+| ------------------- | ---------------------------------------------------------------------- |
+| `Storer`            | Interface for trace persistence (implement or mock)                    |
+| `Handler`           | `slog.Handler` wrapper that captures records into a per-request buffer |
+| `Buffer`            | Thread-safe per-request log buffer                                     |
+| `ErrorTrace`        | Full error trace with log entries                                      |
+| `TraceSummary`      | Lightweight trace without log entries (for list views)                 |
+| `TraceFilter`       | Query parameters for `ListTraces` and `AvailableFilters`               |
+| `FilterOptions`     | Distinct status codes and methods for filter dropdowns                 |
+| `ErrDuplicateTrace` | Sentinel error for duplicate request IDs                               |
 
 ### SQLite store (`github.com/catgoose/promolog/sqlite`)
 
-| Type | Description |
-|------|-------------|
-| `Store` | SQLite-backed implementation of `promolog.Storer` |
+| Type           | Description                                                 |
+| -------------- | ----------------------------------------------------------- |
+| `Store`        | SQLite-backed implementation of `promolog.Storer`           |
 | `NewStore(db)` | Constructor -- pass a `*sql.DB` opened with a SQLite driver |
 
 ## Philosophy
