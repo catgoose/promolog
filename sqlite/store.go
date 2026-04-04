@@ -34,6 +34,17 @@ const migrateAddTags = `ALTER TABLE error_traces ADD COLUMN tags TEXT`
 const migrateAddRequestBody = `ALTER TABLE error_traces ADD COLUMN request_body TEXT`
 const migrateAddResponseBody = `ALTER TABLE error_traces ADD COLUMN response_body TEXT`
 
+const retentionRulesSchema = `CREATE TABLE IF NOT EXISTS retention_rules (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	name        TEXT NOT NULL,
+	field       TEXT NOT NULL,
+	operator    TEXT NOT NULL,
+	value       TEXT NOT NULL,
+	ttl_hours   INTEGER NOT NULL,
+	enabled     BOOLEAN NOT NULL DEFAULT 1,
+	created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`
+
 const filterRulesSchema = `CREATE TABLE IF NOT EXISTS filter_rules (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
 	name        TEXT NOT NULL,
@@ -86,6 +97,9 @@ func (s *Store) InitSchema() error {
 		}
 	}
 	if _, err := s.db.Exec(filterRulesSchema); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(retentionRulesSchema); err != nil {
 		return err
 	}
 	return nil
@@ -398,6 +412,8 @@ func (s *Store) DeleteTrace(ctx context.Context, requestID string) error {
 }
 
 // StartCleanup runs a background goroutine that deletes entries older than ttl.
+// If retention rules are configured, traces matching a rule use that rule's TTL
+// instead of the default. The shortest matching TTL wins.
 func (s *Store) StartCleanup(ctx context.Context, ttl, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -407,11 +423,73 @@ func (s *Store) StartCleanup(ctx context.Context, ttl, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				cutoff := time.Now().Add(-ttl)
-				_, _ = s.db.ExecContext(ctx, "DELETE FROM error_traces WHERE created_at < ?", cutoff)
+				s.runCleanup(ctx, ttl)
 			}
 		}
 	}()
+}
+
+// runCleanup performs a single cleanup pass. Traces matching retention rules
+// use the rule's TTL; all others use the default TTL.
+func (s *Store) runCleanup(ctx context.Context, defaultTTL time.Duration) {
+	engine, err := s.LoadRetentionEngine(ctx)
+	if err != nil || engine == nil {
+		// Fall back to simple default-TTL cleanup.
+		cutoff := time.Now().Add(-defaultTTL)
+		_, _ = s.db.ExecContext(ctx, "DELETE FROM error_traces WHERE created_at < ?", cutoff)
+		return
+	}
+
+	// If no retention rules are enabled, use the fast path.
+	if !engine.HasRules() {
+		cutoff := time.Now().Add(-defaultTTL)
+		_, _ = s.db.ExecContext(ctx, "DELETE FROM error_traces WHERE created_at < ?", cutoff)
+		return
+	}
+
+	// Scan all traces that are older than the shortest possible TTL.
+	// We check each trace against retention rules individually.
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT request_id, status_code, route, method, user_agent, remote_ip, user_id, created_at
+		FROM error_traces`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now()
+	var toDelete []string
+	for rows.Next() {
+		var reqID, route, method, userAgent, remoteIP, userID string
+		var statusCode int
+		var createdAt time.Time
+		if err := rows.Scan(&reqID, &statusCode, &route, &method, &userAgent, &remoteIP, &userID, &createdAt); err != nil {
+			continue
+		}
+
+		fields := map[string]string{
+			"remote_ip":   remoteIP,
+			"route":       route,
+			"status_code": promolog.StatusCodeStr(statusCode),
+			"method":      method,
+			"user_agent":  userAgent,
+			"user_id":     userID,
+		}
+
+		effectiveTTL := defaultTTL
+		if rule, matched := engine.Match(fields); matched {
+			effectiveTTL = time.Duration(rule.TTLHours) * time.Hour
+		}
+
+		if now.Sub(createdAt) > effectiveTTL {
+			toDelete = append(toDelete, reqID)
+		}
+	}
+	_ = rows.Close()
+
+	for _, reqID := range toDelete {
+		_, _ = s.db.ExecContext(ctx, "DELETE FROM error_traces WHERE request_id = ?", reqID)
+	}
 }
 
 // --- Filter rules CRUD ---
@@ -495,6 +573,203 @@ func (s *Store) LoadRuleEngine(ctx context.Context) (*promolog.RuleEngine, error
 		return nil, err
 	}
 	return promolog.NewRuleEngine(rules), nil
+}
+
+// --- Retention rules CRUD ---
+
+// CreateRetentionRule inserts a new retention rule and returns it with its assigned ID and timestamp.
+func (s *Store) CreateRetentionRule(ctx context.Context, rule promolog.RetentionRule) (promolog.RetentionRule, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO retention_rules (name, field, operator, value, ttl_hours, enabled) VALUES (?, ?, ?, ?, ?, ?)`,
+		rule.Name, rule.Field, rule.Operator, rule.Value, rule.TTLHours, rule.Enabled,
+	)
+	if err != nil {
+		return promolog.RetentionRule{}, fmt.Errorf("insert retention rule: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	rule.ID = int(id)
+
+	row := s.db.QueryRowContext(ctx, `SELECT created_at FROM retention_rules WHERE id = ?`, rule.ID)
+	if err := row.Scan(&rule.CreatedAt); err != nil {
+		return promolog.RetentionRule{}, fmt.Errorf("read created_at: %w", err)
+	}
+	return rule, nil
+}
+
+// ListRetentionRules returns all retention rules ordered by creation time.
+func (s *Store) ListRetentionRules(ctx context.Context) ([]promolog.RetentionRule, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, field, operator, value, ttl_hours, enabled, created_at
+		FROM retention_rules ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list retention rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []promolog.RetentionRule
+	for rows.Next() {
+		var r promolog.RetentionRule
+		if err := rows.Scan(&r.ID, &r.Name, &r.Field, &r.Operator, &r.Value,
+			&r.TTLHours, &r.Enabled, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan retention rule: %w", err)
+		}
+		rules = append(rules, r)
+	}
+	return rules, rows.Err()
+}
+
+// UpdateRetentionRule updates an existing retention rule identified by its ID.
+func (s *Store) UpdateRetentionRule(ctx context.Context, rule promolog.RetentionRule) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE retention_rules SET name = ?, field = ?, operator = ?, value = ?, ttl_hours = ?, enabled = ? WHERE id = ?`,
+		rule.Name, rule.Field, rule.Operator, rule.Value, rule.TTLHours, rule.Enabled, rule.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update retention rule: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("retention rule %d not found", rule.ID)
+	}
+	return nil
+}
+
+// DeleteRetentionRule removes a retention rule by ID.
+func (s *Store) DeleteRetentionRule(ctx context.Context, id int) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM retention_rules WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete retention rule: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("retention rule %d not found", id)
+	}
+	return nil
+}
+
+// LoadRetentionEngine reads all enabled retention rules from the database and
+// returns a ready-to-use RetentionEngine.
+func (s *Store) LoadRetentionEngine(ctx context.Context) (*promolog.RetentionEngine, error) {
+	rules, err := s.ListRetentionRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return promolog.NewRetentionEngine(rules), nil
+}
+
+// Aggregate groups traces by the field specified in the filter and returns
+// counts along with the top error chains for each group.
+func (s *Store) Aggregate(ctx context.Context, f promolog.AggregateFilter) ([]promolog.AggregateResult, error) {
+	// Map logical field names to SQL columns.
+	colMap := map[string]string{
+		"route":       "route",
+		"status_code": "status_code",
+		"method":      "method",
+		"error_chain": "error_chain",
+	}
+	col, ok := colMap[f.GroupBy]
+	if !ok {
+		return nil, fmt.Errorf("unsupported GroupBy field: %q", f.GroupBy)
+	}
+
+	var whereClauses []string
+	var args []any
+
+	if f.Window > 0 {
+		cutoff := time.Now().UTC().Add(-f.Window)
+		whereClauses = append(whereClauses, "created_at >= ?")
+		args = append(args, cutoff)
+	}
+
+	minCount := f.MinCount
+	if minCount < 1 {
+		minCount = 1
+	}
+
+	where := ""
+	if len(whereClauses) > 0 {
+		where = " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT %s, COUNT(*) AS cnt FROM error_traces%s GROUP BY %s HAVING cnt >= ? ORDER BY cnt DESC`,
+		col, where, col,
+	)
+	args = append(args, minCount)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate query: %w", err)
+	}
+	defer rows.Close()
+
+	type groupInfo struct {
+		key   string
+		count int
+	}
+	var groups []groupInfo
+	for rows.Next() {
+		var g groupInfo
+		if err := rows.Scan(&g.key, &g.count); err != nil {
+			return nil, fmt.Errorf("scan aggregate row: %w", err)
+		}
+		groups = append(groups, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// For each group, find the top 5 most common error chains.
+	results := make([]promolog.AggregateResult, 0, len(groups))
+	for _, g := range groups {
+		topQuery := fmt.Sprintf(
+			`SELECT error_chain, COUNT(*) AS ecnt FROM error_traces%s AND %s = ? GROUP BY error_chain ORDER BY ecnt DESC LIMIT 5`,
+			where, col,
+		)
+		// If there was no WHERE clause, we need to use WHERE instead of AND.
+		if where == "" {
+			topQuery = fmt.Sprintf(
+				`SELECT error_chain, COUNT(*) AS ecnt FROM error_traces WHERE %s = ? GROUP BY error_chain ORDER BY ecnt DESC LIMIT 5`,
+				col,
+			)
+		}
+
+		// Build args: reuse window args + group key.
+		topArgs := make([]any, 0, len(args))
+		if f.Window > 0 {
+			topArgs = append(topArgs, args[0]) // cutoff
+		}
+		topArgs = append(topArgs, g.key)
+
+		ecRows, err := s.db.QueryContext(ctx, topQuery, topArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("top errors query: %w", err)
+		}
+		var topErrors []string
+		for ecRows.Next() {
+			var chain string
+			var cnt int
+			if err := ecRows.Scan(&chain, &cnt); err != nil {
+				ecRows.Close()
+				return nil, fmt.Errorf("scan top error: %w", err)
+			}
+			if chain != "" {
+				topErrors = append(topErrors, chain)
+			}
+		}
+		ecRows.Close()
+		if err := ecRows.Err(); err != nil {
+			return nil, err
+		}
+
+		results = append(results, promolog.AggregateResult{
+			Key:       g.key,
+			Count:     g.count,
+			TopErrors: topErrors,
+		})
+	}
+
+	return results, nil
 }
 
 // --- WHERE builders ---

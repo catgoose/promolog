@@ -141,6 +141,87 @@ func TestRuleEngine_AllActions(t *testing.T) {
 	}
 }
 
+// --- RetentionEngine tests ---
+
+func TestRetentionEngine_NilEngine_NeverMatches(t *testing.T) {
+	var re *RetentionEngine
+	_, matched := re.Match(map[string]string{"method": "GET"})
+	assert.False(t, matched)
+	assert.False(t, re.HasRules())
+}
+
+func TestRetentionEngine_NoRules_NeverMatches(t *testing.T) {
+	re := NewRetentionEngine(nil)
+	_, matched := re.Match(map[string]string{"method": "GET"})
+	assert.False(t, matched)
+	assert.False(t, re.HasRules())
+}
+
+func TestRetentionEngine_DisabledRulesAreSkipped(t *testing.T) {
+	rules := []RetentionRule{
+		{ID: 1, Name: "short health", Field: "route", Operator: "equals", Value: "/health", TTLHours: 1, Enabled: false},
+	}
+	re := NewRetentionEngine(rules)
+	_, matched := re.Match(map[string]string{"route": "/health"})
+	assert.False(t, matched)
+	assert.False(t, re.HasRules())
+}
+
+func TestRetentionEngine_BasicMatch(t *testing.T) {
+	rules := []RetentionRule{
+		{ID: 1, Name: "short health", Field: "route", Operator: "equals", Value: "/health", TTLHours: 1, Enabled: true},
+	}
+	re := NewRetentionEngine(rules)
+	assert.True(t, re.HasRules())
+
+	rule, matched := re.Match(map[string]string{"route": "/health"})
+	assert.True(t, matched)
+	assert.Equal(t, 1, rule.TTLHours)
+	assert.Equal(t, 1, rule.ID)
+
+	_, matched = re.Match(map[string]string{"route": "/api/users"})
+	assert.False(t, matched)
+}
+
+func TestRetentionEngine_ShortestTTLWins(t *testing.T) {
+	rules := []RetentionRule{
+		{ID: 1, Name: "longer", Field: "method", Operator: "equals", Value: "GET", TTLHours: 24, Enabled: true},
+		{ID: 2, Name: "shorter", Field: "route", Operator: "equals", Value: "/health", TTLHours: 1, Enabled: true},
+	}
+	re := NewRetentionEngine(rules)
+
+	// Both rules match; shortest TTL (1h) should win.
+	rule, matched := re.Match(map[string]string{"method": "GET", "route": "/health"})
+	assert.True(t, matched)
+	assert.Equal(t, 1, rule.TTLHours)
+	assert.Equal(t, 2, rule.ID)
+}
+
+func TestRetentionEngine_AllOperators(t *testing.T) {
+	tests := []struct {
+		op    string
+		value string
+		input string
+		match bool
+	}{
+		{"equals", "/health", "/health", true},
+		{"equals", "/health", "/healthz", false},
+		{"contains", "health", "/api/health/check", true},
+		{"starts_with", "/api", "/api/users", true},
+		{"starts_with", "/api", "/web/api", false},
+		{"matches_glob", "/api/*", "/api/users", true},
+		{"matches_glob", "/api/*", "/web/home", false},
+	}
+	for _, tc := range tests {
+		rules := []RetentionRule{
+			{ID: 1, Name: "test", Field: "route", Operator: tc.op, Value: tc.value, TTLHours: 1, Enabled: true},
+		}
+		re := NewRetentionEngine(rules)
+		_, matched := re.Match(map[string]string{"route": tc.input})
+		assert.Equal(t, tc.match, matched, "op=%s value=%s input=%s", tc.op, tc.value, tc.input)
+	}
+}
+
 func TestTraceFields(t *testing.T) {
 	tr := Trace{
 		RemoteIP:   "192.168.1.1",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -680,4 +681,189 @@ func TestPromote_WithoutBodies_ReturnsEmpty(t *testing.T) {
 
 func TestStore_ImplementsStorer(t *testing.T) {
 	var _ promolog.Storer = (*Store)(nil)
+}
+
+// --- Aggregate tests ---
+
+func TestAggregate_GroupByRoute(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	t1 := sampleTrace("agg-1", 500, "GET")
+	t1.Route = "/api/users"
+	t1.ErrorChain = "connection refused"
+	t2 := sampleTrace("agg-2", 500, "POST")
+	t2.Route = "/api/users"
+	t2.ErrorChain = "timeout"
+	t3 := sampleTrace("agg-3", 404, "GET")
+	t3.Route = "/api/orders"
+	t3.ErrorChain = "not found"
+
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+	require.NoError(t, store.Promote(ctx, t3))
+
+	results, err := store.Aggregate(ctx, promolog.AggregateFilter{
+		GroupBy: "route",
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	// Ordered by count DESC
+	assert.Equal(t, "/api/users", results[0].Key)
+	assert.Equal(t, 2, results[0].Count)
+	assert.Equal(t, "/api/orders", results[1].Key)
+	assert.Equal(t, 1, results[1].Count)
+}
+
+func TestAggregate_GroupByStatusCode(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.Promote(ctx, sampleTrace("agg-s1", 500, "GET")))
+	require.NoError(t, store.Promote(ctx, sampleTrace("agg-s2", 500, "POST")))
+	require.NoError(t, store.Promote(ctx, sampleTrace("agg-s3", 404, "GET")))
+
+	results, err := store.Aggregate(ctx, promolog.AggregateFilter{
+		GroupBy: "status_code",
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "500", results[0].Key)
+	assert.Equal(t, 2, results[0].Count)
+	assert.Equal(t, "404", results[1].Key)
+	assert.Equal(t, 1, results[1].Count)
+}
+
+func TestAggregate_GroupByMethod(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.Promote(ctx, sampleTrace("agg-m1", 500, "GET")))
+	require.NoError(t, store.Promote(ctx, sampleTrace("agg-m2", 500, "GET")))
+	require.NoError(t, store.Promote(ctx, sampleTrace("agg-m3", 500, "POST")))
+
+	results, err := store.Aggregate(ctx, promolog.AggregateFilter{
+		GroupBy: "method",
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "GET", results[0].Key)
+	assert.Equal(t, 2, results[0].Count)
+}
+
+func TestAggregate_GroupByErrorChain(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	t1 := sampleTrace("agg-e1", 500, "GET")
+	t1.ErrorChain = "connection refused"
+	t2 := sampleTrace("agg-e2", 500, "POST")
+	t2.ErrorChain = "connection refused"
+	t3 := sampleTrace("agg-e3", 500, "GET")
+	t3.ErrorChain = "timeout"
+
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+	require.NoError(t, store.Promote(ctx, t3))
+
+	results, err := store.Aggregate(ctx, promolog.AggregateFilter{
+		GroupBy: "error_chain",
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 2)
+	assert.Equal(t, "connection refused", results[0].Key)
+	assert.Equal(t, 2, results[0].Count)
+}
+
+func TestAggregate_MinCount(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	t1 := sampleTrace("agg-mc1", 500, "GET")
+	t1.Route = "/api/users"
+	t2 := sampleTrace("agg-mc2", 500, "GET")
+	t2.Route = "/api/users"
+	t3 := sampleTrace("agg-mc3", 404, "GET")
+	t3.Route = "/api/orders"
+
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+	require.NoError(t, store.Promote(ctx, t3))
+
+	results, err := store.Aggregate(ctx, promolog.AggregateFilter{
+		GroupBy:  "route",
+		MinCount: 2,
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "/api/users", results[0].Key)
+	assert.Equal(t, 2, results[0].Count)
+}
+
+func TestAggregate_Window(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	old := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, store.PromoteAt(ctx, sampleTrace("agg-w1", 500, "GET"), old))
+	require.NoError(t, store.Promote(ctx, sampleTrace("agg-w2", 500, "GET")))
+	require.NoError(t, store.Promote(ctx, sampleTrace("agg-w3", 500, "POST")))
+
+	// Only last 24 hours
+	results, err := store.Aggregate(ctx, promolog.AggregateFilter{
+		GroupBy: "method",
+		Window:  24 * time.Hour,
+	})
+	require.NoError(t, err)
+	// The old GET trace should be excluded, leaving 1 GET and 1 POST
+	for _, r := range results {
+		if r.Key == "GET" {
+			assert.Equal(t, 1, r.Count)
+		}
+	}
+}
+
+func TestAggregate_TopErrors(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Create multiple traces for the same route with different error chains
+	errors := []string{"timeout", "timeout", "timeout", "connection refused", "connection refused", "not found"}
+	for i, ec := range errors {
+		tr := sampleTrace(fmt.Sprintf("agg-te%d", i), 500, "GET")
+		tr.Route = "/api/users"
+		tr.ErrorChain = ec
+		require.NoError(t, store.Promote(ctx, tr))
+	}
+
+	results, err := store.Aggregate(ctx, promolog.AggregateFilter{
+		GroupBy: "route",
+	})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "/api/users", results[0].Key)
+	assert.Equal(t, 6, results[0].Count)
+	// Top errors should be ordered by frequency
+	require.GreaterOrEqual(t, len(results[0].TopErrors), 3)
+	assert.Equal(t, "timeout", results[0].TopErrors[0])
+	assert.Equal(t, "connection refused", results[0].TopErrors[1])
+	assert.Equal(t, "not found", results[0].TopErrors[2])
+}
+
+func TestAggregate_InvalidGroupBy(t *testing.T) {
+	store := newTestStore(t)
+	_, err := store.Aggregate(context.Background(), promolog.AggregateFilter{
+		GroupBy: "invalid_field",
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported GroupBy field")
+}
+
+func TestAggregate_EmptyResults(t *testing.T) {
+	store := newTestStore(t)
+	results, err := store.Aggregate(context.Background(), promolog.AggregateFilter{
+		GroupBy: "route",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, results)
 }

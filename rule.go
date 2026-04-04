@@ -90,14 +90,62 @@ func TraceFields(t Trace) map[string]string {
 	return map[string]string{
 		"remote_ip":   t.RemoteIP,
 		"route":       t.Route,
-		"status_code": strings.TrimSpace(statusCodeStr(t.StatusCode)),
+		"status_code": strings.TrimSpace(StatusCodeStr(t.StatusCode)),
 		"method":      t.Method,
 		"user_agent":  t.UserAgent,
 		"user_id":     t.UserID,
 	}
 }
 
-func statusCodeStr(code int) string {
+// RetentionEngine evaluates retention rules against trace metadata.
+// It holds rules in memory for fast evaluation. A nil or zero-value
+// RetentionEngine never matches (the default TTL applies).
+type RetentionEngine struct {
+	rules []RetentionRule
+}
+
+// NewRetentionEngine creates a RetentionEngine loaded with the given rules.
+// Only enabled rules are retained.
+func NewRetentionEngine(rules []RetentionRule) *RetentionEngine {
+	var enabled []RetentionRule
+	for _, r := range rules {
+		if r.Enabled {
+			enabled = append(enabled, r)
+		}
+	}
+	return &RetentionEngine{rules: enabled}
+}
+
+// HasRules reports whether the engine has any enabled rules loaded.
+func (re *RetentionEngine) HasRules() bool {
+	return re != nil && len(re.rules) > 0
+}
+
+// Match evaluates all loaded retention rules against the provided field values.
+// It returns the matching rule with the shortest TTL (most aggressive retention).
+// If no rule matches, matched is false.
+func (re *RetentionEngine) Match(fields map[string]string) (RetentionRule, bool) {
+	if re == nil || len(re.rules) == 0 {
+		return RetentionRule{}, false
+	}
+	var best RetentionRule
+	found := false
+	for _, r := range re.rules {
+		fieldValue, ok := fields[r.Field]
+		if !ok {
+			continue
+		}
+		if matchOperator(r.Operator, fieldValue, r.Value) {
+			if !found || r.TTLHours < best.TTLHours {
+				best = r
+				found = true
+			}
+		}
+	}
+	return best, found
+}
+
+func StatusCodeStr(code int) string {
 	// Simple int-to-string without importing strconv to keep deps minimal.
 	if code == 0 {
 		return "0"
