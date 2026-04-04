@@ -1,4 +1,4 @@
-// Package promolog provides per-request error trace capture with
+// Package promolog provides per-request trace capture with
 // promote-on-error semantics. Each request buffers its slog records locally;
 // only when an error occurs is the buffer promoted to a Storer implementation
 // for later retrieval. The core package has zero external dependencies.
@@ -74,8 +74,9 @@ func GetBuffer(ctx context.Context) *Buffer {
 	return buf
 }
 
-// ErrorTrace contains all the information captured when a request errors.
-type ErrorTrace struct {
+// Trace contains all the information captured when a request is promoted.
+// ErrorChain is optional and may be empty for non-error promotions.
+type Trace struct {
 	RequestID  string
 	ErrorChain string
 	StatusCode int
@@ -121,9 +122,9 @@ type FilterOptions struct {
 type Storer interface {
 	InitSchema() error
 	SetOnPromote(fn func(TraceSummary))
-	Promote(ctx context.Context, trace ErrorTrace) error
-	PromoteAt(ctx context.Context, trace ErrorTrace, createdAt time.Time) error
-	Get(ctx context.Context, requestID string) (*ErrorTrace, error)
+	Promote(ctx context.Context, trace Trace) error
+	PromoteAt(ctx context.Context, trace Trace, createdAt time.Time) error
+	Get(ctx context.Context, requestID string) (*Trace, error)
 	ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, int, error)
 	AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error)
 	DeleteTrace(ctx context.Context, requestID string) error

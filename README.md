@@ -61,7 +61,7 @@ logger := slog.New(promolog.NewHandler(slog.Default().Handler()))
 
 // In your error handler:
 buf := promolog.GetBuffer(r.Context())
-store.Promote(ctx, promolog.ErrorTrace{
+store.Promote(ctx, promolog.Trace{
 	RequestID: requestID,
 	Entries:   buf.Entries(), // every log line from this request
 	Route:     "/api/users",
@@ -134,7 +134,7 @@ ctx = promolog.NewBufferContext(ctx)
 
 // 4. On error, promote the buffer
 buf := promolog.GetBuffer(ctx)
-err := store.Promote(ctx, promolog.ErrorTrace{
+err := store.Promote(ctx, promolog.Trace{
     RequestID:  requestID,
     ErrorChain: err.Error(),
     StatusCode: 500,
@@ -169,9 +169,9 @@ any backend (Postgres, Redis, in-memory, etc.):
 type Storer interface {
 	InitSchema() error
 	SetOnPromote(fn func(TraceSummary))
-	Promote(ctx context.Context, trace ErrorTrace) error
-	PromoteAt(ctx context.Context, trace ErrorTrace, createdAt time.Time) error
-	Get(ctx context.Context, requestID string) (*ErrorTrace, error)
+	Promote(ctx context.Context, trace Trace) error
+	PromoteAt(ctx context.Context, trace Trace, createdAt time.Time) error
+	Get(ctx context.Context, requestID string) (*Trace, error)
 	ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, int, error)
 	AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error)
 	DeleteTrace(ctx context.Context, requestID string) error
@@ -241,7 +241,7 @@ store.SetOnPromote(func(ts promolog.TraceSummary) {
 | `Storer`            | Interface for trace persistence (implement or mock)                    |
 | `Handler`           | `slog.Handler` wrapper that captures records into a per-request buffer |
 | `Buffer`            | Thread-safe per-request log buffer                                     |
-| `ErrorTrace`        | Full error trace with log entries                                      |
+| `Trace`             | Full trace with log entries (ErrorChain optional for non-error cases)   |
 | `TraceSummary`      | Lightweight trace without log entries (for list views)                 |
 | `TraceFilter`       | Query parameters for `ListTraces` and `AvailableFilters`               |
 | `FilterOptions`     | Distinct status codes and methods for filter dropdowns                 |

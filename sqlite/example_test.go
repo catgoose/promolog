@@ -39,7 +39,7 @@ func ExampleStore_Promote() {
 	ctx := context.Background()
 
 	// Promote persists the buffered log entries when a request fails.
-	err := store.Promote(ctx, promolog.ErrorTrace{
+	err := store.Promote(ctx, promolog.Trace{
 		RequestID:  "req-abc-123",
 		ErrorChain: "connection refused",
 		StatusCode: 502,
@@ -56,7 +56,7 @@ func ExampleStore_Promote() {
 	fmt.Println(err)
 
 	// Promoting the same request ID again returns ErrDuplicateTrace.
-	err = store.Promote(ctx, promolog.ErrorTrace{
+	err = store.Promote(ctx, promolog.Trace{
 		RequestID:  "req-abc-123",
 		ErrorChain: "duplicate",
 		StatusCode: 500,
@@ -77,7 +77,7 @@ func ExampleStore_Get() {
 	_ = store.InitSchema()
 
 	ctx := context.Background()
-	_ = store.Promote(ctx, promolog.ErrorTrace{
+	_ = store.Promote(ctx, promolog.Trace{
 		RequestID:  "req-lookup",
 		ErrorChain: "timeout",
 		StatusCode: 504,
@@ -113,15 +113,15 @@ func ExampleStore_ListTraces() {
 	_ = store.InitSchema()
 
 	ctx := context.Background()
-	_ = store.Promote(ctx, promolog.ErrorTrace{
+	_ = store.Promote(ctx, promolog.Trace{
 		RequestID: "req-1", ErrorChain: "not found", StatusCode: 404,
 		Route: "/api/users/99", Method: "GET",
 	})
-	_ = store.Promote(ctx, promolog.ErrorTrace{
+	_ = store.Promote(ctx, promolog.Trace{
 		RequestID: "req-2", ErrorChain: "db down", StatusCode: 500,
 		Route: "/api/orders", Method: "POST",
 	})
-	_ = store.Promote(ctx, promolog.ErrorTrace{
+	_ = store.Promote(ctx, promolog.Trace{
 		RequestID: "req-3", ErrorChain: "bad gateway", StatusCode: 502,
 		Route: "/api/payments", Method: "POST",
 	})
@@ -156,11 +156,11 @@ func ExampleStore_AvailableFilters() {
 	_ = store.InitSchema()
 
 	ctx := context.Background()
-	_ = store.Promote(ctx, promolog.ErrorTrace{
+	_ = store.Promote(ctx, promolog.Trace{
 		RequestID: "req-1", StatusCode: 400, Route: "/a", Method: "GET",
 		ErrorChain: "bad request",
 	})
-	_ = store.Promote(ctx, promolog.ErrorTrace{
+	_ = store.Promote(ctx, promolog.Trace{
 		RequestID: "req-2", StatusCode: 500, Route: "/b", Method: "POST",
 		ErrorChain: "internal error",
 	})
@@ -190,7 +190,7 @@ func ExampleStore_SetOnPromote() {
 	})
 
 	ctx := context.Background()
-	_ = store.Promote(ctx, promolog.ErrorTrace{
+	_ = store.Promote(ctx, promolog.Trace{
 		RequestID:  "req-notify",
 		ErrorChain: "something broke",
 		StatusCode: 500,
@@ -208,7 +208,7 @@ func ExampleStore_DeleteTrace() {
 	_ = store.InitSchema()
 
 	ctx := context.Background()
-	_ = store.Promote(ctx, promolog.ErrorTrace{
+	_ = store.Promote(ctx, promolog.Trace{
 		RequestID: "req-delete-me", ErrorChain: "gone", StatusCode: 500,
 		Route: "/api/test", Method: "DELETE",
 	})

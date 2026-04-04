@@ -1,4 +1,4 @@
-// Package sqlite provides a SQLite-backed implementation of promolog.Storer.
+// Package sqlite provides a SQLite-backed implementation of [promolog.Storer].
 package sqlite
 
 import (
@@ -28,7 +28,7 @@ const schema = `CREATE TABLE IF NOT EXISTS error_traces (
 CREATE INDEX IF NOT EXISTS idx_error_traces_request_id ON error_traces(request_id);
 CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_at);`
 
-// Store is a SQLite-backed store of error traces.
+// Store is a SQLite-backed store of traces.
 type Store struct {
 	db        *sql.DB
 	onPromote func(promolog.TraceSummary)
@@ -53,17 +53,17 @@ func (s *Store) SetOnPromote(fn func(promolog.TraceSummary)) {
 	s.onPromote = fn
 }
 
-// Promote persists an error trace to the database.
-func (s *Store) Promote(ctx context.Context, trace promolog.ErrorTrace) error {
+// Promote persists a trace to the database.
+func (s *Store) Promote(ctx context.Context, trace promolog.Trace) error {
 	return s.promoteAt(ctx, trace, time.Now().UTC())
 }
 
-// PromoteAt persists an error trace with a specific timestamp.
-func (s *Store) PromoteAt(ctx context.Context, trace promolog.ErrorTrace, createdAt time.Time) error {
+// PromoteAt persists a trace with a specific timestamp.
+func (s *Store) PromoteAt(ctx context.Context, trace promolog.Trace, createdAt time.Time) error {
 	return s.promoteAt(ctx, trace, createdAt)
 }
 
-func (s *Store) promoteAt(ctx context.Context, trace promolog.ErrorTrace, createdAt time.Time) error {
+func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt time.Time) error {
 	data, err := json.Marshal(trace.Entries)
 	if err != nil {
 		return fmt.Errorf("marshal entries: %w", err)
@@ -99,13 +99,13 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.ErrorTrace, create
 	return nil
 }
 
-// Get returns the full error trace for a request ID, or nil if not found.
-func (s *Store) Get(ctx context.Context, requestID string) (*promolog.ErrorTrace, error) {
+// Get returns the full trace for a request ID, or nil if not found.
+func (s *Store) Get(ctx context.Context, requestID string) (*promolog.Trace, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, created_at
 		FROM error_traces WHERE request_id = ?`, requestID)
 
-	var t promolog.ErrorTrace
+	var t promolog.Trace
 	var entriesJSON string
 	err := row.Scan(&t.RequestID, &t.ErrorChain, &t.StatusCode, &t.Route,
 		&t.Method, &t.UserAgent, &t.RemoteIP, &t.UserID, &entriesJSON, &t.CreatedAt)
