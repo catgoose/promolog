@@ -225,6 +225,19 @@ type FilterOptions struct {
 	Tags        map[string][]string // distinct values per tag key
 }
 
+// RetentionRule defines a per-route/status retention policy. Traces matching
+// the rule are retained for the rule's TTL instead of the global default.
+type RetentionRule struct {
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	Field     string    `json:"field"`     // "route", "status_code", "method", etc.
+	Operator  string    `json:"operator"`  // "equals", "contains", "starts_with", "matches_glob"
+	Value     string    `json:"value"`
+	TTLHours  int       `json:"ttl_hours"` // retention period in hours
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Storer defines the interface for trace persistence. Useful for mocking in tests.
 type Storer interface {
 	InitSchema() error
@@ -240,4 +253,8 @@ type Storer interface {
 	ListRules(ctx context.Context) ([]FilterRule, error)
 	UpdateRule(ctx context.Context, rule FilterRule) error
 	DeleteRule(ctx context.Context, id int) error
+	CreateRetentionRule(ctx context.Context, rule RetentionRule) (RetentionRule, error)
+	ListRetentionRules(ctx context.Context) ([]RetentionRule, error)
+	UpdateRetentionRule(ctx context.Context, rule RetentionRule) error
+	DeleteRetentionRule(ctx context.Context, id int) error
 }
