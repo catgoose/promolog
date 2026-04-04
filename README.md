@@ -73,23 +73,43 @@ func handler(w http.ResponseWriter, r *http.Request) {
 ```go
 // Success: logs buffered in memory, then discarded. Zero noise.
 // Error: entire request trace promoted to storage. Full context.
-// Slow request: promoted too. Admin audit: also promoted.
-// The policy decides. You define the rules.
 
-handler := promolog.CorrelationMiddleware(
-    promolog.AutoPromoteMiddleware(store,
-        promolog.StatusPolicy(500),
-        promolog.LatencyPolicy(2 * time.Second),
-        promolog.RoutePolicy("/admin/*", func(code int) bool { return true }),
-    )(mux),
-)
+func errorHandler(store promolog.Storer) func(err error, w http.ResponseWriter, r *http.Request) {
+    return func(err error, w http.ResponseWriter, r *http.Request) {
+        statusCode := http.StatusInternalServerError
+        var apiErr *APIError
+        if errors.As(err, &apiErr) {
+            statusCode = apiErr.Code
+        }
+
+        // Every slog call during this request is already in the buffer.
+        // On error, promote the full trace — same fields, same store.
+        if buf := promolog.GetBuffer(r.Context()); buf != nil {
+            store.Promote(r.Context(), promolog.Trace{
+                RequestID:  promolog.GetRequestID(r.Context()),
+                ErrorChain: err.Error(),
+                StatusCode: statusCode,
+                Route:      r.URL.Path,
+                Method:     r.Method,
+                RemoteIP:   r.RemoteAddr,
+                Entries:    buf.Entries(),
+            })
+        }
+
+        http.Error(w, err.Error(), statusCode)
+    }
+}
 ```
 
 During normal requests, log records are buffered in memory and discarded.
-When a policy matches, the entire buffer is promoted to a store for
-later inspection. You get full request context -- every log line, the request
-and response bodies, trace tags, parent request IDs -- without the noise of
-successful requests.
+When an error occurs, the handler promotes the full buffer to the store —
+every log line that led to the failure, with the request context attached.
+You match the specific error types you care about and promote the same
+trace structure every time.
+
+For automatic promotion without a custom error handler, use
+`AutoPromoteMiddleware` with built-in policies (see [Auto-promote
+middleware](#auto-promote-middleware)).
 
 ## Install
 
