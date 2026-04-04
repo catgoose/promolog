@@ -232,4 +232,8 @@ type Storer interface {
 	AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error)
 	DeleteTrace(ctx context.Context, requestID string) error
 	StartCleanup(ctx context.Context, ttl time.Duration, interval time.Duration)
+	CreateRule(ctx context.Context, rule FilterRule) (FilterRule, error)
+	ListRules(ctx context.Context) ([]FilterRule, error)
+	UpdateRule(ctx context.Context, rule FilterRule) error
+	DeleteRule(ctx context.Context, id int) error
 }
