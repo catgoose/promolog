@@ -40,6 +40,19 @@ func generateID() string {
 //
 //	e.Use(echo.WrapMiddleware(promolog.CorrelationMiddleware))
 func CorrelationMiddleware(next http.Handler) http.Handler {
+	return correlationMiddleware(next, 0)
+}
+
+// CorrelationMiddlewareWithLimit works like CorrelationMiddleware but
+// initialises the per-request Buffer with the given entry limit. A limit of 0
+// means unlimited.
+func CorrelationMiddlewareWithLimit(limit int) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return correlationMiddleware(next, limit)
+	}
+}
+
+func correlationMiddleware(next http.Handler, bufferLimit int) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get("X-Request-ID")
 		if requestID == "" {
@@ -47,7 +60,11 @@ func CorrelationMiddleware(next http.Handler) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		ctx := context.WithValue(r.Context(), RequestIDKey, requestID)
-		ctx = NewBufferContext(ctx)
+		if bufferLimit > 0 {
+			ctx = NewBufferContextWithLimit(ctx, bufferLimit)
+		} else {
+			ctx = NewBufferContext(ctx)
+		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

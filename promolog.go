@@ -8,6 +8,7 @@ package promolog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -33,24 +34,87 @@ type Entry struct {
 
 // Buffer is a per-request log buffer stored in the request context.
 // It is safe for concurrent use.
+//
+// When a limit is set (via NewBuffer), the buffer keeps the first half and last
+// half of entries. Middle entries are dropped and replaced with a synthetic
+// entry indicating how many were elided. A limit of 0 means unlimited.
 type Buffer struct {
 	mu      sync.Mutex
 	entries []Entry
+	limit   int // 0 = unlimited
+	head    []Entry
+	tail    []Entry
+	total   int // total entries appended (only tracked when limit > 0)
+	elided  int // entries dropped from the middle
+}
+
+// NewBuffer creates a Buffer with the given entry limit. A limit of 0 means
+// unlimited (the same as using &Buffer{} directly).
+func NewBuffer(limit int) *Buffer {
+	if limit < 0 {
+		limit = 0
+	}
+	return &Buffer{limit: limit}
 }
 
 // Append adds an entry to the buffer. It is safe for concurrent use.
 func (b *Buffer) Append(e Entry) {
 	b.mu.Lock()
-	b.entries = append(b.entries, e)
-	b.mu.Unlock()
+	defer b.mu.Unlock()
+
+	if b.limit <= 0 {
+		// unlimited mode — original behaviour
+		b.entries = append(b.entries, e)
+		return
+	}
+
+	b.total++
+	headSize := b.limit / 2
+	tailSize := b.limit - headSize
+
+	if len(b.head) < headSize {
+		b.head = append(b.head, e)
+		return
+	}
+
+	// head is full — add to tail ring
+	if len(b.tail) < tailSize {
+		b.tail = append(b.tail, e)
+	} else {
+		b.elided++
+		// overwrite oldest tail entry (ring)
+		copy(b.tail, b.tail[1:])
+		b.tail[tailSize-1] = e
+	}
 }
 
 // Entries returns a copy of the current entries. It is safe for concurrent use.
+// When a limit is active and entries were elided, a synthetic entry is inserted
+// between the head and tail portions indicating how many entries were dropped.
 func (b *Buffer) Entries() []Entry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	cp := make([]Entry, len(b.entries))
-	copy(cp, b.entries)
+
+	if b.limit <= 0 {
+		cp := make([]Entry, len(b.entries))
+		copy(cp, b.entries)
+		return cp
+	}
+
+	size := len(b.head) + len(b.tail)
+	if b.elided > 0 {
+		size++ // synthetic entry
+	}
+	cp := make([]Entry, 0, size)
+	cp = append(cp, b.head...)
+	if b.elided > 0 {
+		cp = append(cp, Entry{
+			Time:    time.Now(),
+			Level:   "WARN",
+			Message: fmt.Sprintf("promolog: %d log entries elided (buffer limit %d)", b.elided, b.limit),
+		})
+	}
+	cp = append(cp, b.tail...)
 	return cp
 }
 
@@ -63,9 +127,18 @@ func (b *Buffer) Snapshot() []Entry {
 
 type bufferKey struct{}
 
-// NewBufferContext returns a new context with an empty Buffer attached.
+// NewBufferContext returns a new context with an empty, unlimited Buffer
+// attached. For a size-limited buffer, use NewBufferContextWithLimit.
 func NewBufferContext(ctx context.Context) context.Context {
 	return context.WithValue(ctx, bufferKey{}, &Buffer{})
+}
+
+// NewBufferContextWithLimit returns a new context with a size-limited Buffer.
+// The limit caps the number of entries kept. When the limit is exceeded the
+// buffer retains the first and last entries and inserts a synthetic entry
+// noting how many middle entries were elided. A limit of 0 means unlimited.
+func NewBufferContextWithLimit(ctx context.Context, limit int) context.Context {
+	return context.WithValue(ctx, bufferKey{}, NewBuffer(limit))
 }
 
 // GetBuffer retrieves the per-request Buffer from the context, or nil.
