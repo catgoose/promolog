@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,10 +24,13 @@ const schema = `CREATE TABLE IF NOT EXISTS error_traces (
 	remote_ip   VARCHAR(45),
 	user_id     VARCHAR(255),
 	entries     TEXT NOT NULL,
+	tags        TEXT,
 	created_at  TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_error_traces_request_id ON error_traces(request_id);
 CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_at);`
+
+const migrateAddTags = `ALTER TABLE error_traces ADD COLUMN tags TEXT`
 
 // Store is a SQLite-backed store of traces.
 type Store struct {
@@ -43,9 +47,20 @@ func NewStore(db *sql.DB) *Store {
 }
 
 // InitSchema creates the error_traces table if it doesn't exist.
+// It also applies any necessary migrations for existing databases.
 func (s *Store) InitSchema() error {
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	// Migration: add tags column if missing (existing databases).
+	// ALTER TABLE ... ADD COLUMN is a no-op error when the column exists.
+	if _, err := s.db.Exec(migrateAddTags); err != nil {
+		// Ignore "duplicate column" errors — the column already exists.
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	return nil
 }
 
 // SetOnPromote registers a callback invoked after each successful promote.
@@ -68,14 +83,23 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 	if err != nil {
 		return fmt.Errorf("marshal entries: %w", err)
 	}
+	var tagsJSON *string
+	if len(trace.Tags) > 0 {
+		tb, err := json.Marshal(trace.Tags)
+		if err != nil {
+			return fmt.Errorf("marshal tags: %w", err)
+		}
+		s := string(tb)
+		tagsJSON = &s
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO error_traces
-			(request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		trace.RequestID, trace.ErrorChain, trace.StatusCode,
 		trace.Route, trace.Method, trace.UserAgent,
 		trace.RemoteIP, trace.UserID, string(data),
-		createdAt,
+		tagsJSON, createdAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert trace: %w", err)
@@ -93,6 +117,7 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 			Method:     trace.Method,
 			RemoteIP:   trace.RemoteIP,
 			UserID:     trace.UserID,
+			Tags:       trace.Tags,
 			CreatedAt:  createdAt,
 		})
 	}
@@ -102,13 +127,14 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 // Get returns the full trace for a request ID, or nil if not found.
 func (s *Store) Get(ctx context.Context, requestID string) (*promolog.Trace, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, created_at
+		`SELECT request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, created_at
 		FROM error_traces WHERE request_id = ?`, requestID)
 
 	var t promolog.Trace
 	var entriesJSON string
+	var tagsJSON sql.NullString
 	err := row.Scan(&t.RequestID, &t.ErrorChain, &t.StatusCode, &t.Route,
-		&t.Method, &t.UserAgent, &t.RemoteIP, &t.UserID, &entriesJSON, &t.CreatedAt)
+		&t.Method, &t.UserAgent, &t.RemoteIP, &t.UserID, &entriesJSON, &tagsJSON, &t.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -117,6 +143,11 @@ func (s *Store) Get(ctx context.Context, requestID string) (*promolog.Trace, err
 	}
 	if err := json.Unmarshal([]byte(entriesJSON), &t.Entries); err != nil {
 		return nil, fmt.Errorf("unmarshal entries: %w", err)
+	}
+	if tagsJSON.Valid && tagsJSON.String != "" {
+		if err := json.Unmarshal([]byte(tagsJSON.String), &t.Tags); err != nil {
+			return nil, fmt.Errorf("unmarshal tags: %w", err)
+		}
 	}
 	return &t, nil
 }
@@ -155,7 +186,7 @@ func (s *Store) ListTraces(ctx context.Context, f promolog.TraceFilter) ([]promo
 
 	offset := (f.Page - 1) * f.PerPage
 	dataQ := fmt.Sprintf(
-		`SELECT request_id, error_chain, status_code, route, method, remote_ip, user_id, created_at
+		`SELECT request_id, error_chain, status_code, route, method, remote_ip, user_id, tags, created_at
 		FROM error_traces%s ORDER BY %s %s LIMIT ? OFFSET ?`,
 		where, orderCol, orderDir)
 	// Use a new slice to avoid aliasing the args backing array.
@@ -172,9 +203,13 @@ func (s *Store) ListTraces(ctx context.Context, f promolog.TraceFilter) ([]promo
 	var result []promolog.TraceSummary
 	for rows.Next() {
 		var ts promolog.TraceSummary
+		var tagsJSON sql.NullString
 		if err := rows.Scan(&ts.RequestID, &ts.ErrorChain, &ts.StatusCode,
-			&ts.Route, &ts.Method, &ts.RemoteIP, &ts.UserID, &ts.CreatedAt); err != nil {
+			&ts.Route, &ts.Method, &ts.RemoteIP, &ts.UserID, &tagsJSON, &ts.CreatedAt); err != nil {
 			return nil, 0, err
+		}
+		if tagsJSON.Valid && tagsJSON.String != "" {
+			_ = json.Unmarshal([]byte(tagsJSON.String), &ts.Tags)
 		}
 		result = append(result, ts)
 	}
@@ -214,6 +249,40 @@ func (s *Store) AvailableFilters(ctx context.Context, f promolog.TraceFilter) (p
 		}
 		opts.Methods = append(opts.Methods, m)
 	}
+
+	// Tag keys — collect distinct keys from the JSON tags column.
+	tw, ta := buildWhereExcluding(f, "tags")
+	tagRows, err := s.db.QueryContext(ctx, "SELECT tags FROM error_traces"+tw, ta...)
+	if err != nil {
+		return opts, err
+	}
+	defer tagRows.Close()
+	tagKeySet := make(map[string]struct{})
+	for tagRows.Next() {
+		var raw sql.NullString
+		if err := tagRows.Scan(&raw); err != nil {
+			return opts, err
+		}
+		if !raw.Valid || raw.String == "" {
+			continue
+		}
+		var m map[string]string
+		if err := json.Unmarshal([]byte(raw.String), &m); err != nil {
+			continue
+		}
+		for k := range m {
+			tagKeySet[k] = struct{}{}
+		}
+	}
+	if len(tagKeySet) > 0 {
+		keys := make([]string, 0, len(tagKeySet))
+		for k := range tagKeySet {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		opts.TagKeys = keys
+	}
+
 	return opts, nil
 }
 
@@ -247,6 +316,7 @@ func buildWhere(f promolog.TraceFilter) (where string, args []any) {
 	addSearch(&clauses, &args, f)
 	addStatus(&clauses, &args, f)
 	addMethod(&clauses, &args, f)
+	addTags(&clauses, &args, f)
 	return whereString(clauses), args
 }
 
@@ -258,6 +328,9 @@ func buildWhereExcluding(f promolog.TraceFilter, exclude string) (where string, 
 	}
 	if exclude != "method" {
 		addMethod(&clauses, &args, f)
+	}
+	if exclude != "tags" {
+		addTags(&clauses, &args, f)
 	}
 	return whereString(clauses), args
 }
@@ -304,6 +377,14 @@ func addMethod(clauses *[]string, args *[]any, f promolog.TraceFilter) {
 	if f.Method != "" {
 		*clauses = append(*clauses, "method = ?")
 		*args = append(*args, f.Method)
+	}
+}
+
+func addTags(clauses *[]string, args *[]any, f promolog.TraceFilter) {
+	for k, v := range f.Tags {
+		// Use json_extract to match tag values in the JSON column.
+		*clauses = append(*clauses, "json_extract(tags, ?) = ?")
+		*args = append(*args, "$."+k, v)
 	}
 }
 
