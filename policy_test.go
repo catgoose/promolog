@@ -1,9 +1,12 @@
 package promolog
 
 import (
+	"context"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -82,4 +85,92 @@ func TestRoutePolicy_InvalidPattern(t *testing.T) {
 	p := RoutePolicy("[invalid", func(int) bool { return true })
 	r := httptest.NewRequest(http.MethodGet, "/anything", http.NoBody)
 	assert.False(t, p.Predicate(r, 500))
+}
+
+// --- SamplePolicy ---
+
+func TestSamplePolicy_AlwaysPromotesAtRate1(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	p := SamplePolicy(1.0, rng)
+	r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	for i := 0; i < 100; i++ {
+		assert.True(t, p.Predicate(r, 200))
+	}
+}
+
+func TestSamplePolicy_NeverPromotesAtRate0(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	p := SamplePolicy(0.0, rng)
+	r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	for i := 0; i < 100; i++ {
+		assert.False(t, p.Predicate(r, 200))
+	}
+}
+
+func TestSamplePolicy_ApproximateRate(t *testing.T) {
+	rng := rand.New(rand.NewSource(99))
+	p := SamplePolicy(0.5, rng)
+	r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+
+	hits := 0
+	n := 10000
+	for i := 0; i < n; i++ {
+		if p.Predicate(r, 200) {
+			hits++
+		}
+	}
+	rate := float64(hits) / float64(n)
+	assert.InDelta(t, 0.5, rate, 0.05)
+}
+
+func TestSamplePolicy_Deterministic(t *testing.T) {
+	results1 := make([]bool, 20)
+	results2 := make([]bool, 20)
+	r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+
+	p1 := SamplePolicy(0.3, rand.New(rand.NewSource(7)))
+	for i := range results1 {
+		results1[i] = p1.Predicate(r, 200)
+	}
+
+	p2 := SamplePolicy(0.3, rand.New(rand.NewSource(7)))
+	for i := range results2 {
+		results2[i] = p2.Predicate(r, 200)
+	}
+
+	assert.Equal(t, results1, results2)
+}
+
+func TestSamplePolicy_Name(t *testing.T) {
+	p := SamplePolicy(0.01, nil)
+	assert.Equal(t, "sample:0.0100", p.Name)
+}
+
+// --- LatencyPolicy ---
+
+func TestLatencyPolicy_PromotesSlowRequest(t *testing.T) {
+	p := LatencyPolicy(50 * time.Millisecond)
+	// Simulate a request that started 100ms ago.
+	ctx := context.WithValue(context.Background(), startTimeKey, time.Now().Add(-100*time.Millisecond))
+	r := httptest.NewRequest(http.MethodGet, "/", http.NoBody).WithContext(ctx)
+	assert.True(t, p.Predicate(r, 200))
+}
+
+func TestLatencyPolicy_DoesNotPromoteFastRequest(t *testing.T) {
+	p := LatencyPolicy(500 * time.Millisecond)
+	// Simulate a request that just started.
+	ctx := context.WithValue(context.Background(), startTimeKey, time.Now())
+	r := httptest.NewRequest(http.MethodGet, "/", http.NoBody).WithContext(ctx)
+	assert.False(t, p.Predicate(r, 200))
+}
+
+func TestLatencyPolicy_NoStartTime(t *testing.T) {
+	p := LatencyPolicy(50 * time.Millisecond)
+	r := httptest.NewRequest(http.MethodGet, "/", http.NoBody)
+	assert.False(t, p.Predicate(r, 200))
+}
+
+func TestLatencyPolicy_Name(t *testing.T) {
+	p := LatencyPolicy(100 * time.Millisecond)
+	assert.Equal(t, "latency:100ms", p.Name)
 }
