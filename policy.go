@@ -1,8 +1,11 @@
 package promolog
 
 import (
+	"fmt"
+	"math/rand"
 	"net/http"
 	"path"
+	"time"
 )
 
 // PromotionPolicy decides whether a completed request's buffer should be
@@ -40,6 +43,39 @@ func RoutePolicy(pattern string, predicate func(statusCode int) bool) PromotionP
 				return false
 			}
 			return matched && predicate(statusCode)
+		},
+	}
+}
+
+// SamplePolicy returns a PromotionPolicy that promotes a random fraction of
+// requests. rate must be between 0 and 1 (e.g. 0.01 = 1%). An optional
+// *rand.Rand source can be provided for deterministic testing; when nil a
+// default source is used.
+func SamplePolicy(rate float64, rng *rand.Rand) PromotionPolicy {
+	if rng == nil {
+		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	}
+	return PromotionPolicy{
+		Name: fmt.Sprintf("sample:%.4f", rate),
+		Predicate: func(_ *http.Request, _ int) bool {
+			return rng.Float64() < rate
+		},
+	}
+}
+
+// LatencyPolicy returns a PromotionPolicy that promotes any request whose
+// duration exceeds threshold. It reads the request start time stored in the
+// context by CorrelationMiddleware; if no start time is present the predicate
+// returns false.
+func LatencyPolicy(threshold time.Duration) PromotionPolicy {
+	return PromotionPolicy{
+		Name: fmt.Sprintf("latency:%s", threshold),
+		Predicate: func(r *http.Request, _ int) bool {
+			start := GetRequestStartTime(r.Context())
+			if start.IsZero() {
+				return false
+			}
+			return time.Since(start) >= threshold
 		},
 	}
 }

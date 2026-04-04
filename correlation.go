@@ -5,7 +5,31 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"time"
 )
+
+type startTimeKeyType struct{}
+
+var startTimeKey = startTimeKeyType{}
+
+// GetRequestStartTime retrieves the request start time from the context, or
+// returns the zero time if none is set.
+func GetRequestStartTime(ctx context.Context) time.Time {
+	if t, ok := ctx.Value(startTimeKey).(time.Time); ok {
+		return t
+	}
+	return time.Time{}
+}
+
+// GetRequestDuration returns the elapsed time since the request started. If no
+// start time is present in the context it returns 0.
+func GetRequestDuration(r *http.Request) time.Duration {
+	start := GetRequestStartTime(r.Context())
+	if start.IsZero() {
+		return 0
+	}
+	return time.Since(start)
+}
 
 // GetRequestID retrieves the request ID from the context, or returns
 // an empty string if none is set.
@@ -60,6 +84,7 @@ func correlationMiddleware(next http.Handler, bufferLimit int) http.Handler {
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		ctx := context.WithValue(r.Context(), RequestIDKey, requestID)
+		ctx = context.WithValue(ctx, startTimeKey, time.Now())
 		if bufferLimit > 0 {
 			ctx = NewBufferContextWithLimit(ctx, bufferLimit)
 		} else {
