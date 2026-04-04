@@ -29,8 +29,7 @@ const schema = `CREATE TABLE IF NOT EXISTS error_traces (
 	created_at        TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_error_traces_request_id ON error_traces(request_id);
-CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_at);
-CREATE INDEX IF NOT EXISTS idx_error_traces_parent_request_id ON error_traces(parent_request_id);`
+CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_at);`
 
 const migrateAddTags = `ALTER TABLE error_traces ADD COLUMN tags TEXT`
 const migrateAddRequestBody = `ALTER TABLE error_traces ADD COLUMN request_body TEXT`
