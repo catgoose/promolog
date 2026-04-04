@@ -229,6 +229,33 @@ type FilterOptions struct {
 	Tags        map[string][]string // distinct values per tag key
 }
 
+// RetentionRule defines a per-route/status retention policy. Traces matching
+// the rule are retained for the rule's TTL instead of the global default.
+type RetentionRule struct {
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	Field     string    `json:"field"`     // "route", "status_code", "method", etc.
+	Operator  string    `json:"operator"`  // "equals", "contains", "starts_with", "matches_glob"
+	Value     string    `json:"value"`
+	TTLHours  int       `json:"ttl_hours"` // retention period in hours
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// AggregateFilter controls how traces are grouped for aggregation.
+type AggregateFilter struct {
+	GroupBy  string        // "route", "status_code", "method", "error_chain"
+	Window   time.Duration // time window to aggregate over
+	MinCount int           // minimum count to include in results
+}
+
+// AggregateResult is a single aggregation bucket.
+type AggregateResult struct {
+	Key       string   // the grouped value (e.g., "/api/users")
+	Count     int      // number of traces in this group
+	TopErrors []string // most common error chains in this group
+}
+
 // Storer defines the interface for trace persistence. Useful for mocking in tests.
 type Storer interface {
 	InitSchema() error
@@ -244,4 +271,39 @@ type Storer interface {
 	ListRules(ctx context.Context) ([]FilterRule, error)
 	UpdateRule(ctx context.Context, rule FilterRule) error
 	DeleteRule(ctx context.Context, id int) error
+	CreateRetentionRule(ctx context.Context, rule RetentionRule) (RetentionRule, error)
+	ListRetentionRules(ctx context.Context) ([]RetentionRule, error)
+	UpdateRetentionRule(ctx context.Context, rule RetentionRule) error
+	DeleteRetentionRule(ctx context.Context, id int) error
+	Aggregate(ctx context.Context, f AggregateFilter) ([]AggregateResult, error)
+}
+
+// Exporter defines the interface for exporting promoted traces to external
+// systems. Implementations live in the export/ subpackages.
+type Exporter interface {
+	// Export sends a single trace to the export destination.
+	Export(ctx context.Context, trace Trace) error
+	// Close flushes any buffered data and releases resources.
+	Close() error
+}
+
+// WireExporter connects an Exporter to a Storer's OnPromote callback so that
+// every promoted trace is exported asynchronously. The export runs in a
+// separate goroutine to avoid blocking the promote path.
+//
+// To use multiple exporters, call WireExporter once for each.
+//
+// Note: because SetOnPromote replaces any previously registered callback, this
+// helper wraps the existing callback (if any) so both are invoked.
+func WireExporter(store Storer, exporter Exporter, getTrace func(ctx context.Context, requestID string) (*Trace, error)) {
+	store.SetOnPromote(func(summary TraceSummary) {
+		go func() {
+			ctx := context.Background()
+			trace, err := getTrace(ctx, summary.RequestID)
+			if err != nil || trace == nil {
+				return
+			}
+			_ = exporter.Export(ctx, *trace)
+		}()
+	})
 }
