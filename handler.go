@@ -2,9 +2,7 @@ package promolog
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
-	"strings"
 )
 
 // Handler is a slog.Handler that captures log records into a per-request
@@ -35,23 +33,27 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 
 	if reqID != "" {
 		if buf := GetBuffer(ctx); buf != nil {
-			var parts []string
+			attrs := make(map[string]string)
 			for _, a := range h.attrs {
 				if a.Key != "request_id" {
-					parts = append(parts, fmt.Sprintf("%s=%s", a.Key, a.Value.String()))
+					attrs[a.Key] = a.Value.String()
 				}
 			}
 			r.Attrs(func(a slog.Attr) bool {
 				if a.Key != "request_id" {
-					parts = append(parts, fmt.Sprintf("%s=%s", a.Key, a.Value.String()))
+					attrs[a.Key] = a.Value.String()
 				}
 				return true
 			})
+			var entryAttrs map[string]string
+			if len(attrs) > 0 {
+				entryAttrs = attrs
+			}
 			buf.Append(Entry{
 				Time:    r.Time,
 				Level:   r.Level.String(),
 				Message: r.Message,
-				Attrs:   strings.Join(parts, " "),
+				Attrs:   entryAttrs,
 			})
 		}
 	}

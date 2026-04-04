@@ -28,7 +28,7 @@ type Entry struct {
 	Time    time.Time `json:"time"`
 	Level   string    `json:"level"`
 	Message string    `json:"msg"`
-	Attrs   string    `json:"attrs,omitempty"`
+	Attrs   map[string]string `json:"attrs,omitempty"`
 }
 
 // Buffer is a per-request log buffer stored in the request context.

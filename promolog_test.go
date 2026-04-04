@@ -99,7 +99,7 @@ func TestHandler_CapturesEntries_WhenRequestIDInContext(t *testing.T) {
 	buf := GetBuffer(ctx)
 	require.Len(t, buf.Entries(), 1)
 	assert.Equal(t, "something broke", buf.Entries()[0].Message)
-	assert.Contains(t, buf.Entries()[0].Attrs, "component=auth")
+	assert.Equal(t, "auth", buf.Entries()[0].Attrs["component"])
 }
 
 func TestHandler_DoesNotCapture_WhenNoRequestID(t *testing.T) {
@@ -177,8 +177,8 @@ func TestHandler_CapturesMultipleAttrs(t *testing.T) {
 
 	buf := GetBuffer(ctx)
 	require.Len(t, buf.Entries(), 1)
-	assert.Contains(t, buf.Entries()[0].Attrs, "foo=bar")
-	assert.Contains(t, buf.Entries()[0].Attrs, "count=42")
+	assert.Equal(t, "bar", buf.Entries()[0].Attrs["foo"])
+	assert.Equal(t, "42", buf.Entries()[0].Attrs["count"])
 }
 
 func TestHandler_ExcludesRequestIDFromAttrs(t *testing.T) {
@@ -195,8 +195,9 @@ func TestHandler_ExcludesRequestIDFromAttrs(t *testing.T) {
 
 	buf := GetBuffer(ctx)
 	require.Len(t, buf.Entries(), 1)
-	assert.NotContains(t, buf.Entries()[0].Attrs, "request_id")
-	assert.Contains(t, buf.Entries()[0].Attrs, "other=value")
+	_, hasReqID := buf.Entries()[0].Attrs["request_id"]
+	assert.False(t, hasReqID)
+	assert.Equal(t, "value", buf.Entries()[0].Attrs["other"])
 }
 
 func TestHandler_WithGroup_PreservesRequestID(t *testing.T) {
@@ -227,8 +228,8 @@ func TestHandler_WithAttrs_PreservesParentAttrs(t *testing.T) {
 
 	buf := GetBuffer(ctx)
 	require.Len(t, buf.Entries(), 1)
-	assert.Contains(t, buf.Entries()[0].Attrs, "service=api")
-	assert.Contains(t, buf.Entries()[0].Attrs, "version=v2")
+	assert.Equal(t, "api", buf.Entries()[0].Attrs["service"])
+	assert.Equal(t, "v2", buf.Entries()[0].Attrs["version"])
 }
 
 func TestHandler_Enabled_DelegatesToInner(t *testing.T) {

@@ -50,7 +50,7 @@ func ExampleStore_Promote() {
 		UserID:     "user-42",
 		Entries: []promolog.Entry{
 			{Time: time.Now(), Level: "INFO", Message: "starting request"},
-			{Time: time.Now(), Level: "ERROR", Message: "connection refused", Attrs: "host=db.local"},
+			{Time: time.Now(), Level: "ERROR", Message: "connection refused", Attrs: map[string]string{"host": "db.local"}},
 		},
 	})
 	fmt.Println(err)
