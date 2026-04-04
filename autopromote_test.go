@@ -49,6 +49,14 @@ func (m *mockStorer) ListRules(_ context.Context) ([]FilterRule, error) {
 }
 func (m *mockStorer) UpdateRule(_ context.Context, _ FilterRule) error { return nil }
 func (m *mockStorer) DeleteRule(_ context.Context, _ int) error       { return nil }
+func (m *mockStorer) CreateRetentionRule(_ context.Context, rule RetentionRule) (RetentionRule, error) {
+	return rule, nil
+}
+func (m *mockStorer) ListRetentionRules(_ context.Context) ([]RetentionRule, error) {
+	return nil, nil
+}
+func (m *mockStorer) UpdateRetentionRule(_ context.Context, _ RetentionRule) error { return nil }
+func (m *mockStorer) DeleteRetentionRule(_ context.Context, _ int) error           { return nil }
 func (m *mockStorer) Aggregate(_ context.Context, _ AggregateFilter) ([]AggregateResult, error) {
 	return nil, nil
 }
