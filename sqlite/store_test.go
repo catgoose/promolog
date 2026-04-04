@@ -648,6 +648,35 @@ func TestPromote_CallbackIncludesTags(t *testing.T) {
 	assert.Equal(t, "checkout", received.Tags["feature"])
 }
 
+// --- Body capture tests ---
+
+func TestPromote_WithBodies_Roundtrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	trace := sampleTrace("req-body", 500, "POST")
+	trace.RequestBody = `{"username":"alice"}`
+	trace.ResponseBody = `{"error":"internal"}`
+	require.NoError(t, store.Promote(ctx, trace))
+
+	got, err := store.Get(ctx, "req-body")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, `{"username":"alice"}`, got.RequestBody)
+	assert.Equal(t, `{"error":"internal"}`, got.ResponseBody)
+}
+
+func TestPromote_WithoutBodies_ReturnsEmpty(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, store.Promote(ctx, sampleTrace("req-nobody", 500, "GET")))
+
+	got, err := store.Get(ctx, "req-nobody")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Empty(t, got.RequestBody)
+	assert.Empty(t, got.ResponseBody)
+}
+
 // --- Storer interface compliance ---
 
 func TestStore_ImplementsStorer(t *testing.T) {

@@ -33,6 +33,8 @@ CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_a
 CREATE INDEX IF NOT EXISTS idx_error_traces_parent_request_id ON error_traces(parent_request_id);`
 
 const migrateAddTags = `ALTER TABLE error_traces ADD COLUMN tags TEXT`
+const migrateAddRequestBody = `ALTER TABLE error_traces ADD COLUMN request_body TEXT`
+const migrateAddResponseBody = `ALTER TABLE error_traces ADD COLUMN response_body TEXT`
 const migrateAddParentRequestID = `ALTER TABLE error_traces ADD COLUMN parent_request_id VARCHAR(64)`
 const migrateAddParentRequestIDIndex = `CREATE INDEX IF NOT EXISTS idx_error_traces_parent_request_id ON error_traces(parent_request_id)`
 
@@ -86,6 +88,18 @@ func (s *Store) InitSchema() error {
 			return err
 		}
 	}
+	// Migration: add request_body column if missing.
+	if _, err := s.db.Exec(migrateAddRequestBody); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	// Migration: add response_body column if missing.
+	if _, err := s.db.Exec(migrateAddResponseBody); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
 	// Migration: add parent_request_id column if missing.
 	if _, err := s.db.Exec(migrateAddParentRequestID); err != nil {
 		if !strings.Contains(err.Error(), "duplicate column") {
@@ -133,18 +147,25 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 		s := string(tb)
 		tagsJSON = &s
 	}
+	var reqBody, respBody *string
+	if trace.RequestBody != "" {
+		reqBody = &trace.RequestBody
+	}
+	if trace.ResponseBody != "" {
+		respBody = &trace.ResponseBody
+	}
 	var parentID *string
 	if trace.ParentRequestID != "" {
 		parentID = &trace.ParentRequestID
 	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO error_traces
-			(request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, request_body, response_body, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		trace.RequestID, parentID, trace.ErrorChain, trace.StatusCode,
 		trace.Route, trace.Method, trace.UserAgent,
 		trace.RemoteIP, trace.UserID, string(data),
-		tagsJSON, createdAt,
+		tagsJSON, reqBody, respBody, createdAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert trace: %w", err)
@@ -173,15 +194,15 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 // Get returns the full trace for a request ID, or nil if not found.
 func (s *Store) Get(ctx context.Context, requestID string) (*promolog.Trace, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, created_at
+		`SELECT request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, request_body, response_body, created_at
 		FROM error_traces WHERE request_id = ?`, requestID)
 
 	var t promolog.Trace
 	var entriesJSON string
-	var tagsJSON sql.NullString
+	var tagsJSON, reqBody, respBody sql.NullString
 	var parentID sql.NullString
 	err := row.Scan(&t.RequestID, &parentID, &t.ErrorChain, &t.StatusCode, &t.Route,
-		&t.Method, &t.UserAgent, &t.RemoteIP, &t.UserID, &entriesJSON, &tagsJSON, &t.CreatedAt)
+		&t.Method, &t.UserAgent, &t.RemoteIP, &t.UserID, &entriesJSON, &tagsJSON, &reqBody, &respBody, &t.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -198,6 +219,12 @@ func (s *Store) Get(ctx context.Context, requestID string) (*promolog.Trace, err
 		if err := json.Unmarshal([]byte(tagsJSON.String), &t.Tags); err != nil {
 			return nil, fmt.Errorf("unmarshal tags: %w", err)
 		}
+	}
+	if reqBody.Valid {
+		t.RequestBody = reqBody.String
+	}
+	if respBody.Valid {
+		t.ResponseBody = respBody.String
 	}
 	return &t, nil
 }
