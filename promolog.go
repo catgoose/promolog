@@ -225,6 +225,20 @@ type FilterOptions struct {
 	Tags        map[string][]string // distinct values per tag key
 }
 
+// AggregateFilter controls how traces are grouped for aggregation.
+type AggregateFilter struct {
+	GroupBy  string        // "route", "status_code", "method", "error_chain"
+	Window   time.Duration // time window to aggregate over
+	MinCount int           // minimum count to include in results
+}
+
+// AggregateResult is a single aggregation bucket.
+type AggregateResult struct {
+	Key       string   // the grouped value (e.g., "/api/users")
+	Count     int      // number of traces in this group
+	TopErrors []string // most common error chains in this group
+}
+
 // Storer defines the interface for trace persistence. Useful for mocking in tests.
 type Storer interface {
 	InitSchema() error
@@ -240,4 +254,5 @@ type Storer interface {
 	ListRules(ctx context.Context) ([]FilterRule, error)
 	UpdateRule(ctx context.Context, rule FilterRule) error
 	DeleteRule(ctx context.Context, id int) error
+	Aggregate(ctx context.Context, f AggregateFilter) ([]AggregateResult, error)
 }

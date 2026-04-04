@@ -49,6 +49,9 @@ func (m *mockStorer) ListRules(_ context.Context) ([]FilterRule, error) {
 }
 func (m *mockStorer) UpdateRule(_ context.Context, _ FilterRule) error { return nil }
 func (m *mockStorer) DeleteRule(_ context.Context, _ int) error       { return nil }
+func (m *mockStorer) Aggregate(_ context.Context, _ AggregateFilter) ([]AggregateResult, error) {
+	return nil, nil
+}
 
 func (m *mockStorer) promoted() []Trace {
 	m.mu.Lock()

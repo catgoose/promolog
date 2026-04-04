@@ -470,6 +470,121 @@ func (s *Store) LoadRuleEngine(ctx context.Context) (*promolog.RuleEngine, error
 	return promolog.NewRuleEngine(rules), nil
 }
 
+// Aggregate groups traces by the field specified in the filter and returns
+// counts along with the top error chains for each group.
+func (s *Store) Aggregate(ctx context.Context, f promolog.AggregateFilter) ([]promolog.AggregateResult, error) {
+	// Map logical field names to SQL columns.
+	colMap := map[string]string{
+		"route":       "route",
+		"status_code": "status_code",
+		"method":      "method",
+		"error_chain": "error_chain",
+	}
+	col, ok := colMap[f.GroupBy]
+	if !ok {
+		return nil, fmt.Errorf("unsupported GroupBy field: %q", f.GroupBy)
+	}
+
+	var whereClauses []string
+	var args []any
+
+	if f.Window > 0 {
+		cutoff := time.Now().UTC().Add(-f.Window)
+		whereClauses = append(whereClauses, "created_at >= ?")
+		args = append(args, cutoff)
+	}
+
+	minCount := f.MinCount
+	if minCount < 1 {
+		minCount = 1
+	}
+
+	where := ""
+	if len(whereClauses) > 0 {
+		where = " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	query := fmt.Sprintf(
+		`SELECT %s, COUNT(*) AS cnt FROM error_traces%s GROUP BY %s HAVING cnt >= ? ORDER BY cnt DESC`,
+		col, where, col,
+	)
+	args = append(args, minCount)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate query: %w", err)
+	}
+	defer rows.Close()
+
+	type groupInfo struct {
+		key   string
+		count int
+	}
+	var groups []groupInfo
+	for rows.Next() {
+		var g groupInfo
+		if err := rows.Scan(&g.key, &g.count); err != nil {
+			return nil, fmt.Errorf("scan aggregate row: %w", err)
+		}
+		groups = append(groups, g)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// For each group, find the top 5 most common error chains.
+	results := make([]promolog.AggregateResult, 0, len(groups))
+	for _, g := range groups {
+		topQuery := fmt.Sprintf(
+			`SELECT error_chain, COUNT(*) AS ecnt FROM error_traces%s AND %s = ? GROUP BY error_chain ORDER BY ecnt DESC LIMIT 5`,
+			where, col,
+		)
+		// If there was no WHERE clause, we need to use WHERE instead of AND.
+		if where == "" {
+			topQuery = fmt.Sprintf(
+				`SELECT error_chain, COUNT(*) AS ecnt FROM error_traces WHERE %s = ? GROUP BY error_chain ORDER BY ecnt DESC LIMIT 5`,
+				col,
+			)
+		}
+
+		// Build args: reuse window args + group key.
+		topArgs := make([]any, 0, len(args))
+		if f.Window > 0 {
+			topArgs = append(topArgs, args[0]) // cutoff
+		}
+		topArgs = append(topArgs, g.key)
+
+		ecRows, err := s.db.QueryContext(ctx, topQuery, topArgs...)
+		if err != nil {
+			return nil, fmt.Errorf("top errors query: %w", err)
+		}
+		var topErrors []string
+		for ecRows.Next() {
+			var chain string
+			var cnt int
+			if err := ecRows.Scan(&chain, &cnt); err != nil {
+				ecRows.Close()
+				return nil, fmt.Errorf("scan top error: %w", err)
+			}
+			if chain != "" {
+				topErrors = append(topErrors, chain)
+			}
+		}
+		ecRows.Close()
+		if err := ecRows.Err(); err != nil {
+			return nil, err
+		}
+
+		results = append(results, promolog.AggregateResult{
+			Key:       g.key,
+			Count:     g.count,
+			TopErrors: topErrors,
+		})
+	}
+
+	return results, nil
+}
+
 // --- WHERE builders ---
 
 func buildWhere(f promolog.TraceFilter) (where string, args []any) {
