@@ -47,9 +47,9 @@ Per-request log capture with policy-driven promotion for Go.
 >
 > -- Layman Grug
 
-Grug was almost right. But when the request fails, the past is exactly what you need. Promolog says: buffer the past, discard it when it doesn't matter, and promote it when it does.
+Grug was almost right. But when a policy matches -- an error, a slow response, an admin action, a sampled baseline -- the past is exactly what you need. Promolog says: buffer the past, discard it when it doesn't matter, and promote it when a policy says it does.
 
-The mental model is simple: **buffer every request, promote based on rules.** An error is one rule. A slow checkout is another. An admin audit trail is a third. The mechanism is the same -- the policy decides.
+The mental model is simple: **buffer every request, promote based on policies.** An error is one policy. A slow checkout is another. An admin audit trail is a third. A 1% sample of all traffic is a fourth. The mechanism is the same -- the policy decides.
 
 ## Why
 
@@ -62,7 +62,8 @@ func handler(w http.ResponseWriter, r *http.Request) {
     slog.Info("validating input", "field", "email")
     slog.Info("querying database", "table", "users")
     // ...request succeeds. These logs are useless.
-    // But when a request FAILS, you wish you had more context.
+    // But when something goes wrong -- or you need an audit trail --
+    // you wish you had more context.
     slog.Error("database timeout", "err", err)
     // Good luck finding the 5 log lines that led to this.
 }
@@ -71,9 +72,22 @@ func handler(w http.ResponseWriter, r *http.Request) {
 **With promolog:**
 
 ```go
-// Success: logs buffered in memory, then discarded. Zero noise.
-// Error: entire request trace promoted to storage. Full context.
+// Normal requests: logs buffered in memory, then discarded. Zero noise.
+// Policy match: entire request trace promoted to storage. Full context.
 
+// Automatic: policies decide what gets promoted.
+handler := promolog.CorrelationMiddleware(
+    promolog.AutoPromoteMiddleware(store,
+        promolog.StatusPolicy(500),                        // server errors
+        promolog.LatencyPolicy(2 * time.Second),           // slow requests
+        promolog.SamplePolicy(0.01, nil),                  // 1% baseline
+        promolog.RoutePolicy("/admin/*", func(int) bool {  // audit trail
+            return true
+        }),
+    )(mux),
+)
+
+// Manual: match specific error types yourself, promote the same way.
 func errorHandler(store promolog.Storer) func(err error, w http.ResponseWriter, r *http.Request) {
     return func(err error, w http.ResponseWriter, r *http.Request) {
         statusCode := http.StatusInternalServerError
@@ -82,8 +96,6 @@ func errorHandler(store promolog.Storer) func(err error, w http.ResponseWriter, 
             statusCode = apiErr.Code
         }
 
-        // Every slog call during this request is already in the buffer.
-        // On error, promote the full trace — same fields, same store.
         if buf := promolog.GetBuffer(r.Context()); buf != nil {
             store.Promote(r.Context(), promolog.Trace{
                 RequestID:  promolog.GetRequestID(r.Context()),
@@ -102,14 +114,11 @@ func errorHandler(store promolog.Storer) func(err error, w http.ResponseWriter, 
 ```
 
 During normal requests, log records are buffered in memory and discarded.
-When an error occurs, the handler promotes the full buffer to the store —
-every log line that led to the failure, with the request context attached.
-You match the specific error types you care about and promote the same
-trace structure every time.
-
-For automatic promotion without a custom error handler, use
-`AutoPromoteMiddleware` with built-in policies (see [Auto-promote
-middleware](#auto-promote-middleware)).
+When a policy matches -- whether it's a status code, latency threshold,
+route pattern, sample rate, or custom predicate -- the full buffer is
+promoted to the store. You get every log line from the request, with
+context attached. Both paths (automatic policies and manual promote)
+write the same `Trace` to the same store.
 
 ## Install
 
@@ -129,7 +138,7 @@ go get github.com/catgoose/promolog/sqlite
 >
 > -- The Wisdom of the Uniform Interface
 
-Unless you fail. Then the server remembers everything.
+Unless a policy says otherwise. Then the server remembers everything.
 
 ## How it works
 
@@ -283,20 +292,37 @@ Available actions: `suppress`, `always_promote`, `tag`, `short_ttl`.
 
 ### Manual promotion
 
-`AutoPromoteMiddleware` handles most cases, but manual `Promote` remains
-available as an escape hatch:
+When your framework has its own error handler or you need to match specific
+error types before promoting, call `Promote` directly. This is how dothog
+uses promolog -- the error handler inspects the error, determines the status
+code, and promotes with the full request context:
 
 ```go
-buf := promolog.GetBuffer(r.Context())
-store.Promote(ctx, promolog.Trace{
-    RequestID:  promolog.GetRequestID(r.Context()),
-    ErrorChain: err.Error(),
-    StatusCode: 500,
-    Route:      r.URL.Path,
-    Method:     r.Method,
-    Entries:    buf.Entries(),
-})
+func errorHandler(store promolog.Storer) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        statusCode := http.StatusInternalServerError
+        var apiErr *APIError
+        if errors.As(err, &apiErr) {
+            statusCode = apiErr.Code
+        }
+
+        if buf := promolog.GetBuffer(r.Context()); buf != nil {
+            store.Promote(r.Context(), promolog.Trace{
+                RequestID:  promolog.GetRequestID(r.Context()),
+                ErrorChain: err.Error(),
+                StatusCode: statusCode,
+                Route:      r.URL.Path,
+                Method:     r.Method,
+                Entries:    buf.Entries(),
+            })
+        }
+    }
+}
 ```
+
+Manual and automatic promotion use the same `Trace` struct and `Storer`
+interface. Use `AutoPromoteMiddleware` for policy-driven promotion, manual
+`Promote` for framework-specific error handling, or both together.
 
 ## Middleware stack
 
