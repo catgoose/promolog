@@ -400,6 +400,61 @@ func TestBuffer_Limit_NoElidedWhenNotExceeded(t *testing.T) {
 	}
 }
 
+// --- Buffer tag tests ---
+
+func TestBuffer_Tag_Basic(t *testing.T) {
+	buf := &Buffer{}
+	buf.Tag("feature", "checkout")
+	buf.Tag("tenant", "acme")
+
+	tags := buf.Tags()
+	require.Len(t, tags, 2)
+	assert.Equal(t, "checkout", tags["feature"])
+	assert.Equal(t, "acme", tags["tenant"])
+}
+
+func TestBuffer_Tag_Overwrite(t *testing.T) {
+	buf := &Buffer{}
+	buf.Tag("env", "staging")
+	buf.Tag("env", "production")
+
+	tags := buf.Tags()
+	require.Len(t, tags, 1)
+	assert.Equal(t, "production", tags["env"])
+}
+
+func TestBuffer_Tags_ReturnsNilWhenEmpty(t *testing.T) {
+	buf := &Buffer{}
+	assert.Nil(t, buf.Tags())
+}
+
+func TestBuffer_Tags_ReturnsCopy(t *testing.T) {
+	buf := &Buffer{}
+	buf.Tag("k", "v")
+
+	tags := buf.Tags()
+	tags["k"] = "mutated"
+	assert.Equal(t, "v", buf.Tags()["k"])
+}
+
+func TestBuffer_Tag_ConcurrentSafe(t *testing.T) {
+	buf := &Buffer{}
+	const goroutines = 10
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for g := range goroutines {
+		go func(id int) {
+			defer wg.Done()
+			buf.Tag(fmt.Sprintf("key-%d", id), fmt.Sprintf("val-%d", id))
+		}(g)
+	}
+	wg.Wait()
+
+	tags := buf.Tags()
+	assert.Len(t, tags, goroutines)
+}
+
 // --- Handler WithBufferLimit tests ---
 
 func TestWithBufferLimit(t *testing.T) {

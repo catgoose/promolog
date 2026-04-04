@@ -46,6 +46,32 @@ type Buffer struct {
 	tail    []Entry
 	total   int // total entries appended (only tracked when limit > 0)
 	elided  int // entries dropped from the middle
+	tags    map[string]string
+}
+
+// Tag sets a key-value tag on the buffer. Tags are included in the Trace
+// when the buffer is promoted. It is safe for concurrent use.
+func (b *Buffer) Tag(key, value string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.tags == nil {
+		b.tags = make(map[string]string)
+	}
+	b.tags[key] = value
+}
+
+// Tags returns a copy of the current tags. It is safe for concurrent use.
+func (b *Buffer) Tags() map[string]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if len(b.tags) == 0 {
+		return nil
+	}
+	cp := make(map[string]string, len(b.tags))
+	for k, v := range b.tags {
+		cp[k] = v
+	}
+	return cp
 }
 
 // NewBuffer creates a Buffer with the given entry limit. A limit of 0 means
@@ -158,6 +184,7 @@ type Trace struct {
 	UserAgent  string
 	RemoteIP   string
 	UserID     string
+	Tags       map[string]string
 	Entries    []Entry
 	CreatedAt  time.Time
 }
@@ -171,6 +198,7 @@ type TraceSummary struct {
 	Method     string
 	RemoteIP   string
 	UserID     string
+	Tags       map[string]string
 	CreatedAt  time.Time
 }
 
@@ -179,6 +207,7 @@ type TraceFilter struct {
 	Q       string
 	Status  string
 	Method  string
+	Tags    map[string]string // filter traces by tag key-value pairs
 	Sort    string
 	Dir     string
 	Page    int
@@ -189,6 +218,7 @@ type TraceFilter struct {
 type FilterOptions struct {
 	StatusCodes []int
 	Methods     []string
+	TagKeys     []string // distinct tag keys across all traces
 }
 
 // Storer defines the interface for trace persistence. Useful for mocking in tests.

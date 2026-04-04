@@ -449,6 +449,110 @@ func TestListTraces_ExactStatusCode(t *testing.T) {
 	assert.Equal(t, "req-502", rows[0].RequestID)
 }
 
+// --- Tag tests ---
+
+func TestPromote_WithTags_Roundtrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	trace := sampleTrace("req-tags", 500, "GET")
+	trace.Tags = map[string]string{"feature": "checkout", "tenant": "acme"}
+	require.NoError(t, store.Promote(ctx, trace))
+
+	got, err := store.Get(ctx, "req-tags")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "checkout", got.Tags["feature"])
+	assert.Equal(t, "acme", got.Tags["tenant"])
+}
+
+func TestPromote_WithoutTags_ReturnsNilTags(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, store.Promote(ctx, sampleTrace("req-notags", 500, "GET")))
+
+	got, err := store.Get(ctx, "req-notags")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Nil(t, got.Tags)
+}
+
+func TestListTraces_TagFilter(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	t1 := sampleTrace("req-t1", 500, "GET")
+	t1.Tags = map[string]string{"feature": "checkout"}
+	t2 := sampleTrace("req-t2", 500, "GET")
+	t2.Tags = map[string]string{"feature": "login"}
+	t3 := sampleTrace("req-t3", 500, "GET")
+	// no tags
+
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+	require.NoError(t, store.Promote(ctx, t3))
+
+	rows, total, err := store.ListTraces(ctx, promolog.TraceFilter{
+		Tags: map[string]string{"feature": "checkout"},
+		Page: 1, PerPage: 10,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "req-t1", rows[0].RequestID)
+	assert.Equal(t, "checkout", rows[0].Tags["feature"])
+}
+
+func TestListTraces_TagFilter_MultipleTagsAND(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	t1 := sampleTrace("req-m1", 500, "GET")
+	t1.Tags = map[string]string{"feature": "checkout", "tenant": "acme"}
+	t2 := sampleTrace("req-m2", 500, "GET")
+	t2.Tags = map[string]string{"feature": "checkout", "tenant": "other"}
+
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+
+	rows, total, err := store.ListTraces(ctx, promolog.TraceFilter{
+		Tags: map[string]string{"feature": "checkout", "tenant": "acme"},
+		Page: 1, PerPage: 10,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "req-m1", rows[0].RequestID)
+}
+
+func TestAvailableFilters_ReturnsTagKeys(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	t1 := sampleTrace("req-tk1", 500, "GET")
+	t1.Tags = map[string]string{"feature": "checkout", "tenant": "acme"}
+	t2 := sampleTrace("req-tk2", 500, "GET")
+	t2.Tags = map[string]string{"env": "prod"}
+
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+
+	opts, err := store.AvailableFilters(ctx, promolog.TraceFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"env", "feature", "tenant"}, opts.TagKeys)
+}
+
+func TestPromote_CallbackIncludesTags(t *testing.T) {
+	store := newTestStore(t)
+	var received promolog.TraceSummary
+	store.SetOnPromote(func(ts promolog.TraceSummary) { received = ts })
+
+	trace := sampleTrace("req-cb-tags", 500, "GET")
+	trace.Tags = map[string]string{"feature": "checkout"}
+	require.NoError(t, store.Promote(context.Background(), trace))
+
+	assert.Equal(t, "checkout", received.Tags["feature"])
+}
+
 // --- Storer interface compliance ---
 
 func TestStore_ImplementsStorer(t *testing.T) {
