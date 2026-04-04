@@ -256,3 +256,33 @@ type Storer interface {
 	DeleteRule(ctx context.Context, id int) error
 	Aggregate(ctx context.Context, f AggregateFilter) ([]AggregateResult, error)
 }
+
+// Exporter defines the interface for exporting promoted traces to external
+// systems. Implementations live in the export/ subpackages.
+type Exporter interface {
+	// Export sends a single trace to the export destination.
+	Export(ctx context.Context, trace Trace) error
+	// Close flushes any buffered data and releases resources.
+	Close() error
+}
+
+// WireExporter connects an Exporter to a Storer's OnPromote callback so that
+// every promoted trace is exported asynchronously. The export runs in a
+// separate goroutine to avoid blocking the promote path.
+//
+// To use multiple exporters, call WireExporter once for each.
+//
+// Note: because SetOnPromote replaces any previously registered callback, this
+// helper wraps the existing callback (if any) so both are invoked.
+func WireExporter(store Storer, exporter Exporter, getTrace func(ctx context.Context, requestID string) (*Trace, error)) {
+	store.SetOnPromote(func(summary TraceSummary) {
+		go func() {
+			ctx := context.Background()
+			trace, err := getTrace(ctx, summary.RequestID)
+			if err != nil || trace == nil {
+				return
+			}
+			_ = exporter.Export(ctx, *trace)
+		}()
+	})
+}
