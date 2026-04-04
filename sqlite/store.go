@@ -32,6 +32,17 @@ CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_a
 
 const migrateAddTags = `ALTER TABLE error_traces ADD COLUMN tags TEXT`
 
+const filterRulesSchema = `CREATE TABLE IF NOT EXISTS filter_rules (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	name        TEXT NOT NULL,
+	field       TEXT NOT NULL,
+	operator    TEXT NOT NULL,
+	value       TEXT NOT NULL,
+	action      TEXT NOT NULL,
+	enabled     BOOLEAN NOT NULL DEFAULT 1,
+	created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)`
+
 // Store is a SQLite-backed store of traces.
 type Store struct {
 	db        *sql.DB
@@ -59,6 +70,9 @@ func (s *Store) InitSchema() error {
 		if !strings.Contains(err.Error(), "duplicate column") {
 			return err
 		}
+	}
+	if _, err := s.db.Exec(filterRulesSchema); err != nil {
+		return err
 	}
 	return nil
 }
@@ -371,6 +385,89 @@ func (s *Store) StartCleanup(ctx context.Context, ttl, interval time.Duration) {
 			}
 		}
 	}()
+}
+
+// --- Filter rules CRUD ---
+
+// CreateRule inserts a new filter rule and returns it with its assigned ID and timestamp.
+func (s *Store) CreateRule(ctx context.Context, rule promolog.FilterRule) (promolog.FilterRule, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO filter_rules (name, field, operator, value, action, enabled) VALUES (?, ?, ?, ?, ?, ?)`,
+		rule.Name, rule.Field, rule.Operator, rule.Value, rule.Action, rule.Enabled,
+	)
+	if err != nil {
+		return promolog.FilterRule{}, fmt.Errorf("insert rule: %w", err)
+	}
+	id, _ := res.LastInsertId()
+	rule.ID = int(id)
+
+	// Read back the created_at value set by the database.
+	row := s.db.QueryRowContext(ctx, `SELECT created_at FROM filter_rules WHERE id = ?`, rule.ID)
+	if err := row.Scan(&rule.CreatedAt); err != nil {
+		return promolog.FilterRule{}, fmt.Errorf("read created_at: %w", err)
+	}
+	return rule, nil
+}
+
+// ListRules returns all filter rules ordered by creation time.
+func (s *Store) ListRules(ctx context.Context) ([]promolog.FilterRule, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, name, field, operator, value, action, enabled, created_at
+		FROM filter_rules ORDER BY created_at ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list rules: %w", err)
+	}
+	defer rows.Close()
+
+	var rules []promolog.FilterRule
+	for rows.Next() {
+		var r promolog.FilterRule
+		if err := rows.Scan(&r.ID, &r.Name, &r.Field, &r.Operator, &r.Value,
+			&r.Action, &r.Enabled, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan rule: %w", err)
+		}
+		rules = append(rules, r)
+	}
+	return rules, rows.Err()
+}
+
+// UpdateRule updates an existing filter rule identified by its ID.
+func (s *Store) UpdateRule(ctx context.Context, rule promolog.FilterRule) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE filter_rules SET name = ?, field = ?, operator = ?, value = ?, action = ?, enabled = ? WHERE id = ?`,
+		rule.Name, rule.Field, rule.Operator, rule.Value, rule.Action, rule.Enabled, rule.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update rule: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("rule %d not found", rule.ID)
+	}
+	return nil
+}
+
+// DeleteRule removes a filter rule by ID.
+func (s *Store) DeleteRule(ctx context.Context, id int) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM filter_rules WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete rule: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("rule %d not found", id)
+	}
+	return nil
+}
+
+// LoadRuleEngine reads all enabled filter rules from the database and
+// returns a ready-to-use RuleEngine.
+func (s *Store) LoadRuleEngine(ctx context.Context) (*promolog.RuleEngine, error) {
+	rules, err := s.ListRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return promolog.NewRuleEngine(rules), nil
 }
 
 // --- WHERE builders ---

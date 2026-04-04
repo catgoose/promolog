@@ -41,6 +41,14 @@ func (m *mockStorer) Promote(_ context.Context, trace Trace) error {
 func (m *mockStorer) PromoteAt(_ context.Context, trace Trace, _ time.Time) error {
 	return m.Promote(context.Background(), trace)
 }
+func (m *mockStorer) CreateRule(_ context.Context, rule FilterRule) (FilterRule, error) {
+	return rule, nil
+}
+func (m *mockStorer) ListRules(_ context.Context) ([]FilterRule, error) {
+	return nil, nil
+}
+func (m *mockStorer) UpdateRule(_ context.Context, _ FilterRule) error { return nil }
+func (m *mockStorer) DeleteRule(_ context.Context, _ int) error       { return nil }
 
 func (m *mockStorer) promoted() []Trace {
 	m.mu.Lock()
