@@ -250,7 +250,56 @@ func (s *Store) AvailableFilters(ctx context.Context, f promolog.TraceFilter) (p
 		opts.Methods = append(opts.Methods, m)
 	}
 
-	// Tag keys — collect distinct keys from the JSON tags column.
+	// Remote IPs (apply all filters)
+	allW, allA := buildWhere(f)
+	ipRows, err := s.db.QueryContext(ctx, "SELECT DISTINCT remote_ip FROM error_traces"+allW+" ORDER BY remote_ip", allA...)
+	if err != nil {
+		return opts, err
+	}
+	defer ipRows.Close()
+	for ipRows.Next() {
+		var ip sql.NullString
+		if err := ipRows.Scan(&ip); err != nil {
+			return opts, err
+		}
+		if ip.Valid && ip.String != "" {
+			opts.RemoteIPs = append(opts.RemoteIPs, ip.String)
+		}
+	}
+
+	// Routes (apply all filters)
+	routeRows, err := s.db.QueryContext(ctx, "SELECT DISTINCT route FROM error_traces"+allW+" ORDER BY route", allA...)
+	if err != nil {
+		return opts, err
+	}
+	defer routeRows.Close()
+	for routeRows.Next() {
+		var route string
+		if err := routeRows.Scan(&route); err != nil {
+			return opts, err
+		}
+		if route != "" {
+			opts.Routes = append(opts.Routes, route)
+		}
+	}
+
+	// User IDs (apply all filters)
+	uidRows, err := s.db.QueryContext(ctx, "SELECT DISTINCT user_id FROM error_traces"+allW+" ORDER BY user_id", allA...)
+	if err != nil {
+		return opts, err
+	}
+	defer uidRows.Close()
+	for uidRows.Next() {
+		var uid sql.NullString
+		if err := uidRows.Scan(&uid); err != nil {
+			return opts, err
+		}
+		if uid.Valid && uid.String != "" {
+			opts.UserIDs = append(opts.UserIDs, uid.String)
+		}
+	}
+
+	// Tags — collect distinct keys and distinct values per key from JSON tags column.
 	tw, ta := buildWhereExcluding(f, "tags")
 	tagRows, err := s.db.QueryContext(ctx, "SELECT tags FROM error_traces"+tw, ta...)
 	if err != nil {
@@ -258,6 +307,7 @@ func (s *Store) AvailableFilters(ctx context.Context, f promolog.TraceFilter) (p
 	}
 	defer tagRows.Close()
 	tagKeySet := make(map[string]struct{})
+	tagValues := make(map[string]map[string]struct{})
 	for tagRows.Next() {
 		var raw sql.NullString
 		if err := tagRows.Scan(&raw); err != nil {
@@ -270,8 +320,12 @@ func (s *Store) AvailableFilters(ctx context.Context, f promolog.TraceFilter) (p
 		if err := json.Unmarshal([]byte(raw.String), &m); err != nil {
 			continue
 		}
-		for k := range m {
+		for k, v := range m {
 			tagKeySet[k] = struct{}{}
+			if tagValues[k] == nil {
+				tagValues[k] = make(map[string]struct{})
+			}
+			tagValues[k][v] = struct{}{}
 		}
 	}
 	if len(tagKeySet) > 0 {
@@ -281,6 +335,16 @@ func (s *Store) AvailableFilters(ctx context.Context, f promolog.TraceFilter) (p
 		}
 		sort.Strings(keys)
 		opts.TagKeys = keys
+
+		opts.Tags = make(map[string][]string, len(tagValues))
+		for k, vs := range tagValues {
+			vals := make([]string, 0, len(vs))
+			for v := range vs {
+				vals = append(vals, v)
+			}
+			sort.Strings(vals)
+			opts.Tags[k] = vals
+		}
 	}
 
 	return opts, nil

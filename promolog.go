@@ -219,6 +219,10 @@ type FilterOptions struct {
 	StatusCodes []int
 	Methods     []string
 	TagKeys     []string // distinct tag keys across all traces
+	RemoteIPs   []string
+	Routes      []string
+	UserIDs     []string
+	Tags        map[string][]string // distinct values per tag key
 }
 
 // Storer defines the interface for trace persistence. Useful for mocking in tests.

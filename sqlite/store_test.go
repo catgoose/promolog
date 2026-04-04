@@ -241,6 +241,100 @@ func TestAvailableFilters_ReturnsDistinctValues(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []int{400, 500}, opts.StatusCodes)
 	assert.Equal(t, []string{"GET", "POST"}, opts.Methods)
+	// All sample traces use the same remote_ip, route, and user_id
+	assert.Equal(t, []string{"127.0.0.1"}, opts.RemoteIPs)
+	assert.Equal(t, []string{"/api/test"}, opts.Routes)
+	assert.Equal(t, []string{"user-42"}, opts.UserIDs)
+}
+
+func TestAvailableFilters_ReturnsDistinctRemoteIPs(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	t1 := sampleTrace("req-ip1", 500, "GET")
+	t1.RemoteIP = "10.0.0.1"
+	t2 := sampleTrace("req-ip2", 500, "GET")
+	t2.RemoteIP = "10.0.0.2"
+	t3 := sampleTrace("req-ip3", 500, "GET")
+	t3.RemoteIP = "10.0.0.1" // duplicate
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+	require.NoError(t, store.Promote(ctx, t3))
+
+	opts, err := store.AvailableFilters(ctx, promolog.TraceFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.0.1", "10.0.0.2"}, opts.RemoteIPs)
+}
+
+func TestAvailableFilters_ReturnsDistinctRoutes(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	t1 := sampleTrace("req-r1", 500, "GET")
+	t1.Route = "/api/users"
+	t2 := sampleTrace("req-r2", 500, "GET")
+	t2.Route = "/api/orders"
+	t3 := sampleTrace("req-r3", 500, "GET")
+	t3.Route = "/api/users" // duplicate
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+	require.NoError(t, store.Promote(ctx, t3))
+
+	opts, err := store.AvailableFilters(ctx, promolog.TraceFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/api/orders", "/api/users"}, opts.Routes)
+}
+
+func TestAvailableFilters_ReturnsDistinctUserIDs(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	t1 := sampleTrace("req-u1", 500, "GET")
+	t1.UserID = "alice"
+	t2 := sampleTrace("req-u2", 500, "GET")
+	t2.UserID = "bob"
+	t3 := sampleTrace("req-u3", 500, "GET")
+	t3.UserID = "alice" // duplicate
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+	require.NoError(t, store.Promote(ctx, t3))
+
+	opts, err := store.AvailableFilters(ctx, promolog.TraceFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alice", "bob"}, opts.UserIDs)
+}
+
+func TestAvailableFilters_ReturnsTagValues(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	t1 := sampleTrace("req-tv1", 500, "GET")
+	t1.Tags = map[string]string{"feature": "checkout", "env": "prod"}
+	t2 := sampleTrace("req-tv2", 500, "GET")
+	t2.Tags = map[string]string{"feature": "login", "env": "prod"}
+	t3 := sampleTrace("req-tv3", 500, "GET")
+	t3.Tags = map[string]string{"feature": "checkout"} // duplicate value
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+	require.NoError(t, store.Promote(ctx, t3))
+
+	opts, err := store.AvailableFilters(ctx, promolog.TraceFilter{})
+	require.NoError(t, err)
+	require.NotNil(t, opts.Tags)
+	assert.Equal(t, []string{"checkout", "login"}, opts.Tags["feature"])
+	assert.Equal(t, []string{"prod"}, opts.Tags["env"])
+}
+
+func TestAvailableFilters_EmptyUserID_Excluded(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	t1 := sampleTrace("req-empty-uid", 500, "GET")
+	t1.UserID = ""
+	t2 := sampleTrace("req-with-uid", 500, "GET")
+	t2.UserID = "alice"
+	require.NoError(t, store.Promote(ctx, t1))
+	require.NoError(t, store.Promote(ctx, t2))
+
+	opts, err := store.AvailableFilters(ctx, promolog.TraceFilter{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alice"}, opts.UserIDs)
 }
 
 func TestAvailableFilters_ExcludesOwnDimension(t *testing.T) {
