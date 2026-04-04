@@ -46,7 +46,9 @@ type Buffer struct {
 	tail    []Entry
 	total   int // total entries appended (only tracked when limit > 0)
 	elided  int // entries dropped from the middle
-	tags    map[string]string
+	tags         map[string]string
+	requestBody  string
+	responseBody string
 }
 
 // Tag sets a key-value tag on the buffer. Tags are included in the Trace
@@ -144,6 +146,36 @@ func (b *Buffer) Entries() []Entry {
 	return cp
 }
 
+// SetRequestBody stores the request body in the buffer. It is safe for
+// concurrent use.
+func (b *Buffer) SetRequestBody(body string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.requestBody = body
+}
+
+// RequestBody returns the stored request body. It is safe for concurrent use.
+func (b *Buffer) RequestBody() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.requestBody
+}
+
+// SetResponseBody stores the response body in the buffer. It is safe for
+// concurrent use.
+func (b *Buffer) SetResponseBody(body string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.responseBody = body
+}
+
+// ResponseBody returns the stored response body. It is safe for concurrent use.
+func (b *Buffer) ResponseBody() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.responseBody
+}
+
 // Snapshot returns a copy of the current entries. It is safe for concurrent use.
 //
 // Deprecated: Use Entries instead.
@@ -176,17 +208,19 @@ func GetBuffer(ctx context.Context) *Buffer {
 // Trace contains all the information captured when a request is promoted.
 // ErrorChain is optional and may be empty for non-error promotions.
 type Trace struct {
-	RequestID  string
-	ErrorChain string
-	StatusCode int
-	Route      string
-	Method     string
-	UserAgent  string
-	RemoteIP   string
-	UserID     string
-	Tags       map[string]string
-	Entries    []Entry
-	CreatedAt  time.Time
+	RequestID    string
+	ErrorChain   string
+	StatusCode   int
+	Route        string
+	Method       string
+	UserAgent    string
+	RemoteIP     string
+	UserID       string
+	Tags         map[string]string
+	Entries      []Entry
+	RequestBody  string `json:"request_body,omitempty"`
+	ResponseBody string `json:"response_body,omitempty"`
+	CreatedAt    time.Time
 }
 
 // TraceSummary is a lightweight row for list views (no log entries).
