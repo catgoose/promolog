@@ -57,6 +57,9 @@ func (m *mockStorer) ListRetentionRules(_ context.Context) ([]RetentionRule, err
 }
 func (m *mockStorer) UpdateRetentionRule(_ context.Context, _ RetentionRule) error { return nil }
 func (m *mockStorer) DeleteRetentionRule(_ context.Context, _ int) error           { return nil }
+func (m *mockStorer) Aggregate(_ context.Context, _ AggregateFilter) ([]AggregateResult, error) {
+	return nil, nil
+}
 
 func (m *mockStorer) promoted() []Trace {
 	m.mu.Lock()
