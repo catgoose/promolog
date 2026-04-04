@@ -41,7 +41,7 @@ func sampleTrace(requestID string, statusCode int, method string) promolog.Error
 		RemoteIP:   "127.0.0.1",
 		UserID:     "user-42",
 		Entries: []promolog.Entry{
-			{Time: time.Now(), Level: "ERROR", Message: "test error", Attrs: "key=val"},
+			{Time: time.Now(), Level: "ERROR", Message: "test error", Attrs: map[string]string{"key": "val"}},
 		},
 	}
 }
