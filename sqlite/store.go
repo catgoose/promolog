@@ -14,23 +14,27 @@ import (
 )
 
 const schema = `CREATE TABLE IF NOT EXISTS error_traces (
-	id          INTEGER PRIMARY KEY AUTOINCREMENT,
-	request_id  VARCHAR(64) NOT NULL UNIQUE,
-	error_chain TEXT NOT NULL,
-	status_code INT NOT NULL,
-	route       VARCHAR(500) NOT NULL,
-	method      VARCHAR(10) NOT NULL,
-	user_agent  TEXT,
-	remote_ip   VARCHAR(45),
-	user_id     VARCHAR(255),
-	entries     TEXT NOT NULL,
-	tags        TEXT,
-	created_at  TIMESTAMP NOT NULL
+	id                INTEGER PRIMARY KEY AUTOINCREMENT,
+	request_id        VARCHAR(64) NOT NULL UNIQUE,
+	parent_request_id VARCHAR(64),
+	error_chain       TEXT NOT NULL,
+	status_code       INT NOT NULL,
+	route             VARCHAR(500) NOT NULL,
+	method            VARCHAR(10) NOT NULL,
+	user_agent        TEXT,
+	remote_ip         VARCHAR(45),
+	user_id           VARCHAR(255),
+	entries           TEXT NOT NULL,
+	tags              TEXT,
+	created_at        TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_error_traces_request_id ON error_traces(request_id);
-CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_at);`
+CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_at);
+CREATE INDEX IF NOT EXISTS idx_error_traces_parent_request_id ON error_traces(parent_request_id);`
 
 const migrateAddTags = `ALTER TABLE error_traces ADD COLUMN tags TEXT`
+const migrateAddParentRequestID = `ALTER TABLE error_traces ADD COLUMN parent_request_id VARCHAR(64)`
+const migrateAddParentRequestIDIndex = `CREATE INDEX IF NOT EXISTS idx_error_traces_parent_request_id ON error_traces(parent_request_id)`
 
 const retentionRulesSchema = `CREATE TABLE IF NOT EXISTS retention_rules (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +86,15 @@ func (s *Store) InitSchema() error {
 			return err
 		}
 	}
+	// Migration: add parent_request_id column if missing.
+	if _, err := s.db.Exec(migrateAddParentRequestID); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	if _, err := s.db.Exec(migrateAddParentRequestIDIndex); err != nil {
+		return err
+	}
 	if _, err := s.db.Exec(filterRulesSchema); err != nil {
 		return err
 	}
@@ -120,11 +133,15 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 		s := string(tb)
 		tagsJSON = &s
 	}
+	var parentID *string
+	if trace.ParentRequestID != "" {
+		parentID = &trace.ParentRequestID
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO error_traces
-			(request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		trace.RequestID, trace.ErrorChain, trace.StatusCode,
+			(request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		trace.RequestID, parentID, trace.ErrorChain, trace.StatusCode,
 		trace.Route, trace.Method, trace.UserAgent,
 		trace.RemoteIP, trace.UserID, string(data),
 		tagsJSON, createdAt,
@@ -138,15 +155,16 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 	}
 	if s.onPromote != nil {
 		s.onPromote(promolog.TraceSummary{
-			RequestID:  trace.RequestID,
-			ErrorChain: trace.ErrorChain,
-			StatusCode: trace.StatusCode,
-			Route:      trace.Route,
-			Method:     trace.Method,
-			RemoteIP:   trace.RemoteIP,
-			UserID:     trace.UserID,
-			Tags:       trace.Tags,
-			CreatedAt:  createdAt,
+			RequestID:       trace.RequestID,
+			ParentRequestID: trace.ParentRequestID,
+			ErrorChain:      trace.ErrorChain,
+			StatusCode:      trace.StatusCode,
+			Route:           trace.Route,
+			Method:          trace.Method,
+			RemoteIP:        trace.RemoteIP,
+			UserID:          trace.UserID,
+			Tags:            trace.Tags,
+			CreatedAt:       createdAt,
 		})
 	}
 	return nil
@@ -155,19 +173,23 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 // Get returns the full trace for a request ID, or nil if not found.
 func (s *Store) Get(ctx context.Context, requestID string) (*promolog.Trace, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, created_at
+		`SELECT request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, created_at
 		FROM error_traces WHERE request_id = ?`, requestID)
 
 	var t promolog.Trace
 	var entriesJSON string
 	var tagsJSON sql.NullString
-	err := row.Scan(&t.RequestID, &t.ErrorChain, &t.StatusCode, &t.Route,
+	var parentID sql.NullString
+	err := row.Scan(&t.RequestID, &parentID, &t.ErrorChain, &t.StatusCode, &t.Route,
 		&t.Method, &t.UserAgent, &t.RemoteIP, &t.UserID, &entriesJSON, &tagsJSON, &t.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("scan trace: %w", err)
+	}
+	if parentID.Valid {
+		t.ParentRequestID = parentID.String
 	}
 	if err := json.Unmarshal([]byte(entriesJSON), &t.Entries); err != nil {
 		return nil, fmt.Errorf("unmarshal entries: %w", err)
@@ -214,7 +236,7 @@ func (s *Store) ListTraces(ctx context.Context, f promolog.TraceFilter) ([]promo
 
 	offset := (f.Page - 1) * f.PerPage
 	dataQ := fmt.Sprintf(
-		`SELECT request_id, error_chain, status_code, route, method, remote_ip, user_id, tags, created_at
+		`SELECT request_id, parent_request_id, error_chain, status_code, route, method, remote_ip, user_id, tags, created_at
 		FROM error_traces%s ORDER BY %s %s LIMIT ? OFFSET ?`,
 		where, orderCol, orderDir)
 	// Use a new slice to avoid aliasing the args backing array.
@@ -232,9 +254,13 @@ func (s *Store) ListTraces(ctx context.Context, f promolog.TraceFilter) ([]promo
 	for rows.Next() {
 		var ts promolog.TraceSummary
 		var tagsJSON sql.NullString
-		if err := rows.Scan(&ts.RequestID, &ts.ErrorChain, &ts.StatusCode,
+		var pID sql.NullString
+		if err := rows.Scan(&ts.RequestID, &pID, &ts.ErrorChain, &ts.StatusCode,
 			&ts.Route, &ts.Method, &ts.RemoteIP, &ts.UserID, &tagsJSON, &ts.CreatedAt); err != nil {
 			return nil, 0, err
+		}
+		if pID.Valid {
+			ts.ParentRequestID = pID.String
 		}
 		if tagsJSON.Valid && tagsJSON.String != "" {
 			_ = json.Unmarshal([]byte(tagsJSON.String), &ts.Tags)

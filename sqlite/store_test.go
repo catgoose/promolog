@@ -654,6 +654,57 @@ func TestStore_ImplementsStorer(t *testing.T) {
 	var _ promolog.Storer = (*Store)(nil)
 }
 
+// --- ParentRequestID tests ---
+
+func TestPromote_WithParentRequestID_Roundtrip(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	trace := sampleTrace("req-child", 500, "GET")
+	trace.ParentRequestID = "req-parent"
+	require.NoError(t, store.Promote(ctx, trace))
+
+	got, err := store.Get(ctx, "req-child")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "req-parent", got.ParentRequestID)
+}
+
+func TestPromote_WithoutParentRequestID_ReturnsEmpty(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, store.Promote(ctx, sampleTrace("req-noparent", 500, "GET")))
+
+	got, err := store.Get(ctx, "req-noparent")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Empty(t, got.ParentRequestID)
+}
+
+func TestListTraces_IncludesParentRequestID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	trace := sampleTrace("req-list-parent", 500, "GET")
+	trace.ParentRequestID = "req-list-origin"
+	require.NoError(t, store.Promote(ctx, trace))
+
+	rows, total, err := store.ListTraces(ctx, promolog.TraceFilter{Page: 1, PerPage: 10})
+	require.NoError(t, err)
+	assert.Equal(t, 1, total)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "req-list-origin", rows[0].ParentRequestID)
+}
+
+func TestPromote_CallbackIncludesParentRequestID(t *testing.T) {
+	store := newTestStore(t)
+	var received promolog.TraceSummary
+	store.SetOnPromote(func(ts promolog.TraceSummary) { received = ts })
+
+	trace := sampleTrace("req-cb-parent", 500, "GET")
+	trace.ParentRequestID = "req-cb-origin"
+	require.NoError(t, store.Promote(context.Background(), trace))
+
+	assert.Equal(t, "req-cb-origin", received.ParentRequestID)
+}
 // --- Aggregate tests ---
 
 func TestAggregate_GroupByRoute(t *testing.T) {
