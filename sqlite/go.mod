@@ -2,6 +2,8 @@ module github.com/catgoose/promolog/sqlite
 
 go 1.26.1
 
+replace github.com/catgoose/promolog => ../
+
 require (
 	github.com/catgoose/promolog v0.2.8
 	github.com/mattn/go-sqlite3 v1.14.37

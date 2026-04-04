@@ -30,8 +30,8 @@ func newTestStore(t *testing.T) *Store {
 	return store
 }
 
-func sampleTrace(requestID string, statusCode int, method string) promolog.ErrorTrace {
-	return promolog.ErrorTrace{
+func sampleTrace(requestID string, statusCode int, method string) promolog.Trace {
+	return promolog.Trace{
 		RequestID:  requestID,
 		ErrorChain: "something went wrong",
 		StatusCode: statusCode,
