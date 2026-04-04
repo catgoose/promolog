@@ -40,6 +40,15 @@ func GetRequestID(ctx context.Context) string {
 	return ""
 }
 
+// GetParentRequestID retrieves the parent request ID from the context, or
+// returns an empty string if none is set.
+func GetParentRequestID(ctx context.Context) string {
+	if id, ok := ctx.Value(parentRequestIDKey).(string); ok {
+		return id
+	}
+	return ""
+}
+
 // generateID produces a 32-character hex-encoded random request ID.
 func generateID() string {
 	b := make([]byte, 16)
@@ -78,12 +87,27 @@ func CorrelationMiddlewareWithLimit(limit int) func(http.Handler) http.Handler {
 
 func correlationMiddleware(next http.Handler, bufferLimit int) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := r.Header.Get("X-Request-ID")
+		incomingID := r.Header.Get("X-Request-ID")
+		parentID := r.Header.Get("X-Parent-Request-ID")
+
+		requestID := incomingID
 		if requestID == "" {
 			requestID = generateID()
 		}
+
+		// If a parent header was explicitly provided, use it. Otherwise,
+		// when an incoming X-Request-ID was present, treat it as the parent
+		// and generate a fresh child ID to represent this service's span.
+		if parentID == "" && incomingID != "" {
+			parentID = incomingID
+			requestID = generateID()
+		}
+
 		w.Header().Set("X-Request-ID", requestID)
 		ctx := context.WithValue(r.Context(), RequestIDKey, requestID)
+		if parentID != "" {
+			ctx = context.WithValue(ctx, parentRequestIDKey, parentID)
+		}
 		ctx = context.WithValue(ctx, startTimeKey, time.Now())
 		if bufferLimit > 0 {
 			ctx = NewBufferContextWithLimit(ctx, bufferLimit)
@@ -92,4 +116,45 @@ func correlationMiddleware(next http.Handler, bufferLimit int) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// correlationRoundTripper is an http.RoundTripper that propagates the request
+// ID from the request context to outgoing HTTP requests via the X-Request-ID
+// header.
+type correlationRoundTripper struct {
+	base http.RoundTripper
+}
+
+// CorrelationTransport returns an http.RoundTripper that reads the request ID
+// from the outgoing request's context and sets it as the X-Request-ID header.
+// If no request ID is present in the context the request is passed through
+// unmodified. When base is nil, http.DefaultTransport is used.
+func CorrelationTransport(base http.RoundTripper) http.RoundTripper {
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return &correlationRoundTripper{base: base}
+}
+
+func (t *correlationRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	id := GetRequestID(req.Context())
+	if id != "" {
+		// Clone the request to avoid mutating the caller's headers.
+		r2 := req.Clone(req.Context())
+		r2.Header.Set("X-Request-ID", id)
+		return t.base.RoundTrip(r2)
+	}
+	return t.base.RoundTrip(req)
+}
+
+// NewCorrelatedClient returns a shallow copy of base (or http.DefaultClient
+// when base is nil) whose transport propagates request IDs via the
+// X-Request-ID header. The original client is not modified.
+func NewCorrelatedClient(base *http.Client) *http.Client {
+	if base == nil {
+		base = http.DefaultClient
+	}
+	cp := *base
+	cp.Transport = CorrelationTransport(base.Transport)
+	return &cp
 }

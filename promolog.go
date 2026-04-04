@@ -21,8 +21,10 @@ var ErrDuplicateTrace = errors.New("promolog: duplicate request ID")
 //
 //	ctx = context.WithValue(ctx, promolog.RequestIDKey, "req-123")
 type requestIDKeyType struct{}
+type parentRequestIDKeyType struct{}
 
 var RequestIDKey = requestIDKeyType{}
+var parentRequestIDKey = parentRequestIDKeyType{}
 
 // Entry is a single captured log record.
 type Entry struct {
@@ -208,32 +210,34 @@ func GetBuffer(ctx context.Context) *Buffer {
 // Trace contains all the information captured when a request is promoted.
 // ErrorChain is optional and may be empty for non-error promotions.
 type Trace struct {
-	RequestID    string
-	ErrorChain   string
-	StatusCode   int
-	Route        string
-	Method       string
-	UserAgent    string
-	RemoteIP     string
-	UserID       string
-	Tags         map[string]string
-	Entries      []Entry
-	RequestBody  string `json:"request_body,omitempty"`
-	ResponseBody string `json:"response_body,omitempty"`
-	CreatedAt    time.Time
+	RequestID       string
+	ParentRequestID string `json:"parent_request_id,omitempty"`
+	ErrorChain      string
+	StatusCode      int
+	Route           string
+	Method          string
+	UserAgent       string
+	RemoteIP        string
+	UserID          string
+	Tags            map[string]string
+	Entries         []Entry
+	RequestBody     string `json:"request_body,omitempty"`
+	ResponseBody    string `json:"response_body,omitempty"`
+	CreatedAt       time.Time
 }
 
 // TraceSummary is a lightweight row for list views (no log entries).
 type TraceSummary struct {
-	RequestID  string
-	ErrorChain string
-	StatusCode int
-	Route      string
-	Method     string
-	RemoteIP   string
-	UserID     string
-	Tags       map[string]string
-	CreatedAt  time.Time
+	RequestID       string
+	ParentRequestID string `json:"parent_request_id,omitempty"`
+	ErrorChain      string
+	StatusCode      int
+	Route           string
+	Method          string
+	RemoteIP        string
+	UserID          string
+	Tags            map[string]string
+	CreatedAt       time.Time
 }
 
 // TraceFilter holds all filter parameters for ListTraces.
