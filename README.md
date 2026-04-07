@@ -1,5 +1,7 @@
 # promolog
 
+![image](https://github.com/catgoose/screenshots/blob/main/promolog/promolog.png)
+
 <!--toc:start-->
 
 - [promolog](#promolog)
