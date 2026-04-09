@@ -1,8 +1,10 @@
 package promolog
 
 import (
+	"bufio"
 	"bytes"
 	"io"
+	"net"
 	"net/http"
 )
 
@@ -90,7 +92,7 @@ func BodyCaptureMiddleware(opts ...BodyCaptureOption) func(http.Handler) http.Ha
 				promoBuf:       buf,
 				redactor:       cfg.redactor,
 			}
-			next.ServeHTTP(crw, r)
+			next.ServeHTTP(wrapCaptureResponseWriter(crw), r)
 		})
 	}
 }
@@ -98,13 +100,15 @@ func BodyCaptureMiddleware(opts ...BodyCaptureOption) func(http.Handler) http.Ha
 // captureResponseWriter wraps http.ResponseWriter and copies written bytes
 // into a local buffer up to maxSize. After each Write the current captured
 // content (with optional redaction) is pushed into the per-request Buffer so
-// that inner middleware can access it.
+// that inner middleware can access it. It is never handed to downstream
+// handlers directly — wrapCaptureResponseWriter picks a variant whose method
+// set matches the optional interfaces supported by the underlying writer.
 type captureResponseWriter struct {
 	http.ResponseWriter
 	maxSize  int
 	capBuf   *bytes.Buffer // local accumulator
 	captured int
-	promoBuf *Buffer                   // per-request Buffer
+	promoBuf *Buffer                  // per-request Buffer
 	redactor func(body []byte) []byte // optional redaction hook
 }
 
@@ -136,4 +140,67 @@ func (crw *captureResponseWriter) WriteHeader(code int) {
 // the chain to access the original writer (e.g. for http.Flusher).
 func (crw *captureResponseWriter) Unwrap() http.ResponseWriter {
 	return crw.ResponseWriter
+}
+
+// The crw* variants below preserve the exact optional-interface method set of
+// the wrapped writer, for the same reason documented on responseWriter's
+// variants in autopromote.go.
+
+// crwFlusher forwards http.Flusher.
+type crwFlusher struct {
+	*captureResponseWriter
+}
+
+func (r crwFlusher) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// crwHijacker forwards http.Hijacker. Note: once the connection is hijacked,
+// any bytes written directly to the raw net.Conn bypass this wrapper's Write
+// method, so they will NOT be captured into the per-request Buffer. That is
+// an inherent limitation of hijacking — the middleware has no visibility into
+// the hijacked stream.
+type crwHijacker struct {
+	*captureResponseWriter
+}
+
+func (r crwHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return r.ResponseWriter.(http.Hijacker).Hijack()
+}
+
+// crwFlushHijacker forwards both http.Flusher and http.Hijacker.
+type crwFlushHijacker struct {
+	*captureResponseWriter
+}
+
+func (r crwFlushHijacker) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack delegates to the underlying writer. See the note on crwHijacker
+// about captured-bytes visibility after hijacking.
+func (r crwFlushHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return r.ResponseWriter.(http.Hijacker).Hijack()
+}
+
+// wrapCaptureResponseWriter returns an http.ResponseWriter whose method set
+// matches the optional interfaces (http.Flusher, http.Hijacker) supported by
+// the underlying writer. The returned wrapper shares state with base.
+func wrapCaptureResponseWriter(base *captureResponseWriter) http.ResponseWriter {
+	_, isFlusher := base.ResponseWriter.(http.Flusher)
+	_, isHijacker := base.ResponseWriter.(http.Hijacker)
+	switch {
+	case isFlusher && isHijacker:
+		return crwFlushHijacker{captureResponseWriter: base}
+	case isFlusher:
+		return crwFlusher{captureResponseWriter: base}
+	case isHijacker:
+		return crwHijacker{captureResponseWriter: base}
+	default:
+		return base
+	}
 }

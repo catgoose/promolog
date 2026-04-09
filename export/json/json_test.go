@@ -16,19 +16,22 @@ import (
 
 func sampleTrace() promolog.Trace {
 	return promolog.Trace{
-		RequestID:  "req-001",
-		ErrorChain: "something broke",
-		StatusCode: 500,
-		Route:      "/api/items",
-		Method:     "GET",
-		UserAgent:  "test-agent",
-		RemoteIP:   "127.0.0.1",
-		UserID:     "user-42",
-		Tags:       map[string]string{"env": "test"},
+		RequestID:       "req-001",
+		ParentRequestID: "parent-xyz",
+		ErrorChain:      "something broke",
+		StatusCode:      500,
+		Route:           "/api/items",
+		Method:          "GET",
+		UserAgent:       "test-agent",
+		RemoteIP:        "127.0.0.1",
+		UserID:          "user-42",
+		Tags:            map[string]string{"env": "test"},
 		Entries: []promolog.Entry{
 			{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Level: "ERROR", Message: "boom"},
 		},
-		CreatedAt: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
+		RequestBody:  `{"q":"hello"}`,
+		ResponseBody: `{"error":"boom"}`,
+		CreatedAt:    time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -83,6 +86,59 @@ func TestExport_WithFields(t *testing.T) {
 	assert.NotContains(t, m, "route")
 	assert.NotContains(t, m, "method")
 	assert.NotContains(t, m, "entries")
+	assert.NotContains(t, m, "request_body")
+	assert.NotContains(t, m, "response_body")
+	assert.NotContains(t, m, "parent_request_id")
+}
+
+func TestExport_IncludesParentRequestIDAndBodies(t *testing.T) {
+	var buf bytes.Buffer
+	exp := jsonexport.New(&buf)
+
+	err := exp.Export(context.Background(), sampleTrace())
+	require.NoError(t, err)
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &m))
+
+	assert.Equal(t, "parent-xyz", m["parent_request_id"])
+	assert.Equal(t, `{"q":"hello"}`, m["request_body"])
+	assert.Equal(t, `{"error":"boom"}`, m["response_body"])
+}
+
+func TestExport_OmitsEmptyParentRequestIDAndBodies(t *testing.T) {
+	var buf bytes.Buffer
+	exp := jsonexport.New(&buf)
+
+	tr := sampleTrace()
+	tr.ParentRequestID = ""
+	tr.RequestBody = ""
+	tr.ResponseBody = ""
+	require.NoError(t, exp.Export(context.Background(), tr))
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &m))
+
+	assert.NotContains(t, m, "parent_request_id")
+	assert.NotContains(t, m, "request_body")
+	assert.NotContains(t, m, "response_body")
+}
+
+func TestExport_WithFields_FiltersByParentRequestID(t *testing.T) {
+	var buf bytes.Buffer
+	exp := jsonexport.New(&buf, jsonexport.WithFields("request_id", "parent_request_id"))
+
+	err := exp.Export(context.Background(), sampleTrace())
+	require.NoError(t, err)
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &m))
+
+	assert.Equal(t, "req-001", m["request_id"])
+	assert.Equal(t, "parent-xyz", m["parent_request_id"])
+	assert.NotContains(t, m, "request_body")
+	assert.NotContains(t, m, "response_body")
+	assert.NotContains(t, m, "status_code")
 }
 
 func TestExport_MultipleTraces(t *testing.T) {

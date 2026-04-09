@@ -18,19 +18,22 @@ import (
 
 func sampleTrace() promolog.Trace {
 	return promolog.Trace{
-		RequestID:  "req-001",
-		ErrorChain: "something broke",
-		StatusCode: 500,
-		Route:      "/api/items",
-		Method:     "GET",
-		UserAgent:  "test-agent",
-		RemoteIP:   "127.0.0.1",
-		UserID:     "user-42",
-		Tags:       map[string]string{"env": "test"},
+		RequestID:       "req-001",
+		ParentRequestID: "parent-xyz",
+		ErrorChain:      "something broke",
+		StatusCode:      500,
+		Route:           "/api/items",
+		Method:          "GET",
+		UserAgent:       "test-agent",
+		RemoteIP:        "127.0.0.1",
+		UserID:          "user-42",
+		Tags:            map[string]string{"env": "test"},
 		Entries: []promolog.Entry{
 			{Time: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Level: "ERROR", Message: "boom"},
 		},
-		CreatedAt: time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
+		RequestBody:  `{"q":"hello"}`,
+		ResponseBody: `{"error":"boom"}`,
+		CreatedAt:    time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -101,6 +104,46 @@ func TestExport_ConnectionRefused(t *testing.T) {
 func TestClose(t *testing.T) {
 	exp := webhook.New("http://example.com")
 	assert.NoError(t, exp.Close())
+}
+
+func TestExport_IncludesParentRequestIDAndBodies(t *testing.T) {
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := webhook.New(srv.URL)
+	err := exp.Export(context.Background(), sampleTrace())
+	require.NoError(t, err)
+
+	assert.Equal(t, "parent-xyz", received["parent_request_id"])
+	assert.Equal(t, `{"q":"hello"}`, received["request_body"])
+	assert.Equal(t, `{"error":"boom"}`, received["response_body"])
+}
+
+func TestExport_OmitsEmptyParentRequestIDAndBodies(t *testing.T) {
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tr := sampleTrace()
+	tr.ParentRequestID = ""
+	tr.RequestBody = ""
+	tr.ResponseBody = ""
+
+	exp := webhook.New(srv.URL)
+	require.NoError(t, exp.Export(context.Background(), tr))
+
+	assert.NotContains(t, received, "parent_request_id")
+	assert.NotContains(t, received, "request_body")
+	assert.NotContains(t, received, "response_body")
 }
 
 func TestWithClient(t *testing.T) {

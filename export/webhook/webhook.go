@@ -66,32 +66,38 @@ func New(url string, opts ...Option) *Exporter {
 // tracePayload mirrors the JSON structure used by the JSON exporter for
 // consistency.
 type tracePayload struct {
-	RequestID  string            `json:"request_id"`
-	ErrorChain string            `json:"error_chain,omitempty"`
-	StatusCode int               `json:"status_code"`
-	Route      string            `json:"route"`
-	Method     string            `json:"method"`
-	UserAgent  string            `json:"user_agent,omitempty"`
-	RemoteIP   string            `json:"remote_ip,omitempty"`
-	UserID     string            `json:"user_id,omitempty"`
-	Tags       map[string]string `json:"tags,omitempty"`
-	Entries    []promolog.Entry  `json:"entries,omitempty"`
-	CreatedAt  string            `json:"created_at"`
+	RequestID       string            `json:"request_id"`
+	ParentRequestID string            `json:"parent_request_id,omitempty"`
+	ErrorChain      string            `json:"error_chain,omitempty"`
+	StatusCode      int               `json:"status_code"`
+	Route           string            `json:"route"`
+	Method          string            `json:"method"`
+	UserAgent       string            `json:"user_agent,omitempty"`
+	RemoteIP        string            `json:"remote_ip,omitempty"`
+	UserID          string            `json:"user_id,omitempty"`
+	Tags            map[string]string `json:"tags,omitempty"`
+	Entries         []promolog.Entry  `json:"entries,omitempty"`
+	RequestBody     string            `json:"request_body,omitempty"`
+	ResponseBody    string            `json:"response_body,omitempty"`
+	CreatedAt       string            `json:"created_at"`
 }
 
 func toPayload(t promolog.Trace) tracePayload {
 	return tracePayload{
-		RequestID:  t.RequestID,
-		ErrorChain: t.ErrorChain,
-		StatusCode: t.StatusCode,
-		Route:      t.Route,
-		Method:     t.Method,
-		UserAgent:  t.UserAgent,
-		RemoteIP:   t.RemoteIP,
-		UserID:     t.UserID,
-		Tags:       t.Tags,
-		Entries:    t.Entries,
-		CreatedAt:  t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		RequestID:       t.RequestID,
+		ParentRequestID: t.ParentRequestID,
+		ErrorChain:      t.ErrorChain,
+		StatusCode:      t.StatusCode,
+		Route:           t.Route,
+		Method:          t.Method,
+		UserAgent:       t.UserAgent,
+		RemoteIP:        t.RemoteIP,
+		UserID:          t.UserID,
+		Tags:            t.Tags,
+		Entries:         t.Entries,
+		RequestBody:     t.RequestBody,
+		ResponseBody:    t.ResponseBody,
+		CreatedAt:       t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
 

@@ -2,6 +2,7 @@ package promolog
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"net/http"
 	"path"
@@ -48,10 +49,15 @@ func RoutePolicy(pattern string, predicate func(statusCode int) bool) PromotionP
 }
 
 // SamplePolicy returns a PromotionPolicy that promotes a random fraction of
-// requests. rate must be between 0 and 1 (e.g. 0.01 = 1%). An optional
-// *rand.Rand source can be provided for deterministic testing; when nil a
-// default source is used.
+// requests. rate must be in the closed interval [0, 1] (e.g. 0.01 = 1%).
+// Values outside that range, or NaN, panic at construction time because they
+// indicate a configuration bug that should fail loudly rather than silently
+// misbehave. An optional *rand.Rand source can be provided for deterministic
+// testing; when nil a default source is used.
 func SamplePolicy(rate float64, rng *rand.Rand) PromotionPolicy {
+	if math.IsNaN(rate) || rate < 0 || rate > 1 {
+		panic(fmt.Sprintf("promolog: SamplePolicy rate must be in [0, 1], got %v", rate))
+	}
 	if rng == nil {
 		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
