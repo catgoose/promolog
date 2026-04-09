@@ -247,6 +247,47 @@ func TestAutoPromote_ImplicitOKWhenNoWriteHeader(t *testing.T) {
 	assert.Empty(t, store.promoted())
 }
 
+func TestAutoPromote_PreservesParentRequestID(t *testing.T) {
+	store := &mockStorer{}
+	stack := newTestStack(store, []PromotionPolicy{StatusPolicy(500)}, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/items", http.NoBody)
+	// CorrelationMiddleware treats an incoming X-Request-ID as the parent ID
+	// when no explicit X-Parent-Request-ID header is set.
+	req.Header.Set("X-Request-ID", "parent-abc")
+	rec := httptest.NewRecorder()
+	stack.ServeHTTP(rec, req)
+
+	traces := store.promoted()
+	require.Len(t, traces, 1)
+	assert.Equal(t, "parent-abc", traces[0].ParentRequestID)
+	assert.NotEqual(t, "parent-abc", traces[0].RequestID,
+		"child request should have a distinct request ID")
+}
+
+func TestAutoPromote_PreservesBufferTags(t *testing.T) {
+	store := &mockStorer{}
+	stack := newTestStack(store, []PromotionPolicy{StatusPolicy(500)}, func(w http.ResponseWriter, r *http.Request) {
+		buf := GetBuffer(r.Context())
+		buf.Tag("user_id", "user-42")
+		buf.Tag("feature", "checkout")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/orders", http.NoBody)
+	rec := httptest.NewRecorder()
+	stack.ServeHTTP(rec, req)
+
+	traces := store.promoted()
+	require.Len(t, traces, 1)
+	assert.Equal(t, map[string]string{
+		"user_id": "user-42",
+		"feature": "checkout",
+	}, traces[0].Tags)
+}
+
 func TestAutoPromote_WithoutCorrelationMiddleware_NoPromotion(t *testing.T) {
 	store := &mockStorer{}
 	// Use AutoPromoteMiddleware without CorrelationMiddleware.

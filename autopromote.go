@@ -86,16 +86,18 @@ func promoteFromRequest(store Storer, r *http.Request, statusCode int) {
 	}
 
 	trace := Trace{
-		RequestID:    requestID,
-		StatusCode:   statusCode,
-		Route:        r.URL.Path,
-		Method:       r.Method,
-		UserAgent:    r.UserAgent(),
-		RemoteIP:     r.RemoteAddr,
-		Entries:      buf.Entries(),
-		RequestBody:  buf.RequestBody(),
-		ResponseBody: buf.ResponseBody(),
-		CreatedAt:    time.Now(),
+		RequestID:       requestID,
+		ParentRequestID: GetParentRequestID(ctx),
+		StatusCode:      statusCode,
+		Route:           r.URL.Path,
+		Method:          r.Method,
+		UserAgent:       r.UserAgent(),
+		RemoteIP:        r.RemoteAddr,
+		Tags:            buf.Tags(),
+		Entries:         buf.Entries(),
+		RequestBody:     buf.RequestBody(),
+		ResponseBody:    buf.ResponseBody(),
+		CreatedAt:       time.Now(),
 	}
 
 	// Best-effort promotion; errors are intentionally ignored because the
