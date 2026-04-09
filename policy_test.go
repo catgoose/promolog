@@ -2,6 +2,7 @@ package promolog
 
 import (
 	"context"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -144,6 +145,29 @@ func TestSamplePolicy_Deterministic(t *testing.T) {
 func TestSamplePolicy_Name(t *testing.T) {
 	p := SamplePolicy(0.01, nil)
 	assert.Equal(t, "sample:0.0100", p.Name)
+}
+
+func TestSamplePolicy_PanicsOnNegativeRate(t *testing.T) {
+	assert.PanicsWithValue(t,
+		"promolog: SamplePolicy rate must be in [0, 1], got -0.1",
+		func() { _ = SamplePolicy(-0.1, nil) },
+	)
+}
+
+func TestSamplePolicy_PanicsOnRateAboveOne(t *testing.T) {
+	assert.PanicsWithValue(t,
+		"promolog: SamplePolicy rate must be in [0, 1], got 1.5",
+		func() { _ = SamplePolicy(1.5, nil) },
+	)
+}
+
+func TestSamplePolicy_PanicsOnNaN(t *testing.T) {
+	assert.Panics(t, func() { _ = SamplePolicy(math.NaN(), nil) })
+}
+
+func TestSamplePolicy_BoundaryRatesDoNotPanic(t *testing.T) {
+	assert.NotPanics(t, func() { _ = SamplePolicy(0, nil) })
+	assert.NotPanics(t, func() { _ = SamplePolicy(1, nil) })
 }
 
 // --- LatencyPolicy ---
