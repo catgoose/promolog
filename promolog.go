@@ -292,7 +292,7 @@ type AggregateResult struct {
 
 // Storer defines the interface for trace persistence. Useful for mocking in tests.
 type Storer interface {
-	InitSchema() error
+	EnsureSchema() error
 	SetOnPromote(fn func(TraceSummary))
 	Promote(ctx context.Context, trace Trace) error
 	PromoteAt(ctx context.Context, trace Trace, createdAt time.Time) error
