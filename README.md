@@ -570,7 +570,7 @@ any backend:
 
 ```go
 type Storer interface {
-    InitSchema() error
+    EnsureSchema() error
     SetOnPromote(fn func(TraceSummary))
     Promote(ctx context.Context, trace Trace) error
     PromoteAt(ctx context.Context, trace Trace, createdAt time.Time) error
@@ -590,10 +590,6 @@ type Storer interface {
     Aggregate(ctx context.Context, f AggregateFilter) ([]AggregateResult, error)
 }
 ```
-
-The SQLite store also provides `EnsureSchema()` as the preferred idempotent
-startup/migration entry point. `InitSchema()` remains available as a
-compatibility alias.
 
 ## Duplicate handling
 

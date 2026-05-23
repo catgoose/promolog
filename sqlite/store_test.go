@@ -392,16 +392,6 @@ func TestEnsureSchema_Idempotent(t *testing.T) {
 	require.NoError(t, store.EnsureSchema())
 }
 
-// TestInitSchema_AliasDelegates verifies the deprecated InitSchema alias still
-// drives the same idempotent ensure/migrate path as EnsureSchema.
-func TestInitSchema_AliasDelegates(t *testing.T) {
-	db := openTestDB(t)
-	store := NewStore(db)
-	require.NoError(t, store.InitSchema())
-	require.NoError(t, store.EnsureSchema())
-	require.NoError(t, store.InitSchema())
-}
-
 // --- Promote edge cases ---
 
 func TestPromote_EmptyEntries(t *testing.T) {

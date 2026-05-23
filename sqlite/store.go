@@ -118,13 +118,6 @@ func (s *Store) EnsureSchema() error {
 	return nil
 }
 
-// InitSchema is a deprecated alias for [Store.EnsureSchema]. New code should
-// call EnsureSchema directly; the name better reflects the idempotent
-// startup/migration behavior.
-//
-// Deprecated: use EnsureSchema.
-func (s *Store) InitSchema() error { return s.EnsureSchema() }
-
 // SetOnPromote registers a callback invoked after each successful promote.
 func (s *Store) SetOnPromote(fn func(promolog.TraceSummary)) {
 	s.onPromote = fn
