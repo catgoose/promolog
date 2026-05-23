@@ -121,6 +121,22 @@ func (re *RetentionEngine) HasRules() bool {
 	return re != nil && len(re.rules) > 0
 }
 
+// MinTTL returns the smallest TTL across all enabled rules, or 0 when no
+// rules are loaded. Callers use this to bound the candidate set during
+// cleanup so traces younger than any possible effective TTL are skipped.
+func (re *RetentionEngine) MinTTL() time.Duration {
+	if re == nil || len(re.rules) == 0 {
+		return 0
+	}
+	minHours := re.rules[0].TTLHours
+	for _, r := range re.rules[1:] {
+		if r.TTLHours < minHours {
+			minHours = r.TTLHours
+		}
+	}
+	return time.Duration(minHours) * time.Hour
+}
+
 // Match evaluates all loaded retention rules against the provided field values.
 // It returns the matching rule with the shortest TTL (most aggressive retention).
 // If no rule matches, matched is false.

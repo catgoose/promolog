@@ -350,6 +350,47 @@ func TestAvailableFilters_ExcludesOwnDimension(t *testing.T) {
 	assert.Equal(t, []string{"GET", "POST"}, opts.Methods)
 }
 
+// --- RunCleanup tests ---
+
+func TestRunCleanup_DeletesExpiredTraces(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	old := time.Now().Add(-48 * time.Hour)
+	require.NoError(t, store.PromoteAt(ctx, sampleTrace("req-old", 500, "GET"), old))
+	require.NoError(t, store.Promote(ctx, sampleTrace("req-new", 500, "GET")))
+
+	deleted, err := store.RunCleanup(ctx, 24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted)
+
+	got, err := store.Get(ctx, "req-old")
+	require.NoError(t, err)
+	assert.Nil(t, got, "expired trace should be deleted")
+
+	got, err = store.Get(ctx, "req-new")
+	require.NoError(t, err)
+	assert.NotNil(t, got, "fresh trace should survive")
+}
+
+func TestRunCleanup_NoExpiredTraces_ReturnsZero(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, store.Promote(ctx, sampleTrace("req-fresh", 500, "GET")))
+
+	deleted, err := store.RunCleanup(ctx, 24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 0, deleted)
+}
+
+func TestRunCleanup_EmptyStore_ReturnsZero(t *testing.T) {
+	store := newTestStore(t)
+
+	deleted, err := store.RunCleanup(context.Background(), time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 0, deleted)
+}
+
 // --- StartCleanup tests ---
 
 func TestStartCleanup_DeletesExpiredTraces(t *testing.T) {

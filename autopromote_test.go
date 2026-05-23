@@ -30,6 +30,9 @@ func (m *mockStorer) AvailableFilters(_ context.Context, _ TraceFilter) (FilterO
 	return FilterOptions{}, nil
 }
 func (m *mockStorer) DeleteTrace(_ context.Context, _ string) error { return nil }
+func (m *mockStorer) RunCleanup(_ context.Context, _ time.Duration) (int, error) {
+	return 0, nil
+}
 func (m *mockStorer) StartCleanup(_ context.Context, _, _ time.Duration) {
 }
 func (m *mockStorer) Promote(_ context.Context, trace Trace) error {

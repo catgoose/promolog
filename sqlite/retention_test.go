@@ -260,6 +260,62 @@ func TestStartCleanup_RetentionRuleShortestTTLWins(t *testing.T) {
 	assert.Nil(t, got, "trace should be deleted using shortest matching TTL")
 }
 
+// --- RunCleanup with retention rules ---
+
+func TestRunCleanup_AppliesRetentionRules(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Rule: health checks expire after 1 hour; default TTL is 24h.
+	_, err := store.CreateRetentionRule(ctx, promolog.RetentionRule{
+		Name: "short health", Field: "route", Operator: "equals",
+		Value: "/health", TTLHours: 1, Enabled: true,
+	})
+	require.NoError(t, err)
+
+	healthOld := sampleTrace("req-health-old", 200, "GET")
+	healthOld.Route = "/health"
+	require.NoError(t, store.PromoteAt(ctx, healthOld, time.Now().Add(-2*time.Hour)))
+
+	apiOld := sampleTrace("req-api-old", 500, "GET")
+	apiOld.Route = "/api/users"
+	require.NoError(t, store.PromoteAt(ctx, apiOld, time.Now().Add(-2*time.Hour)))
+
+	healthFresh := sampleTrace("req-health-fresh", 200, "GET")
+	healthFresh.Route = "/health"
+	require.NoError(t, store.Promote(ctx, healthFresh))
+
+	deleted, err := store.RunCleanup(ctx, 24*time.Hour)
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted, "only the old health trace should be deleted")
+
+	got, err := store.Get(ctx, "req-health-old")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+
+	got, err = store.Get(ctx, "req-api-old")
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+
+	got, err = store.Get(ctx, "req-health-fresh")
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+}
+
+// TestRunCleanup_RetentionLoadErrorPropagates verifies that a retention-engine
+// load failure surfaces to direct RunCleanup callers instead of silently
+// degrading to default-TTL deletion. Setup: create error_traces but skip
+// retention_rules so LoadRetentionEngine's underlying query fails.
+func TestRunCleanup_RetentionLoadErrorPropagates(t *testing.T) {
+	db := openTestDB(t)
+	_, err := db.Exec(schema)
+	require.NoError(t, err)
+
+	store := NewStore(db)
+	_, err = store.RunCleanup(context.Background(), time.Hour)
+	require.Error(t, err, "retention engine load failure must not be swallowed")
+}
+
 // --- Schema idempotency ---
 
 func TestEnsureSchema_RetentionRulesIdempotent(t *testing.T) {

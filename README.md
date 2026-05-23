@@ -174,7 +174,11 @@ import (
 db, _ := sql.Open("sqlite3", "traces.db")
 store := sqlite.NewStore(db)
 store.EnsureSchema()
+// Background cleanup: every hour, delete traces older than 90 days
+// (retention rules can shorten TTL per-trace).
 store.StartCleanup(ctx, 90*24*time.Hour, time.Hour)
+// One-shot variant — useful in cron jobs or ad-hoc admin paths:
+//   deleted, err := store.RunCleanup(ctx, 90*24*time.Hour)
 
 // 2. Wrap your slog handler
 logger := slog.New(promolog.NewHandler(slog.Default().Handler()))
@@ -578,6 +582,7 @@ type Storer interface {
     ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, int, error)
     AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error)
     DeleteTrace(ctx context.Context, requestID string) error
+    RunCleanup(ctx context.Context, defaultTTL time.Duration) (int, error)
     StartCleanup(ctx context.Context, ttl time.Duration, interval time.Duration)
     CreateRule(ctx context.Context, rule FilterRule) (FilterRule, error)
     ListRules(ctx context.Context) ([]FilterRule, error)
