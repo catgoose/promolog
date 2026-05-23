@@ -300,6 +300,7 @@ type Storer interface {
 	ListTraces(ctx context.Context, f TraceFilter) ([]TraceSummary, int, error)
 	AvailableFilters(ctx context.Context, f TraceFilter) (FilterOptions, error)
 	DeleteTrace(ctx context.Context, requestID string) error
+	RunCleanup(ctx context.Context, defaultTTL time.Duration) (int, error)
 	StartCleanup(ctx context.Context, ttl time.Duration, interval time.Duration)
 	CreateRule(ctx context.Context, rule FilterRule) (FilterRule, error)
 	ListRules(ctx context.Context) ([]FilterRule, error)

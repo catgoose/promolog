@@ -437,9 +437,11 @@ func (s *Store) DeleteTrace(ctx context.Context, requestID string) error {
 	return err
 }
 
-// StartCleanup runs a background goroutine that deletes entries older than ttl.
-// If retention rules are configured, traces matching a rule use that rule's TTL
-// instead of the default. The shortest matching TTL wins.
+// StartCleanup runs a background goroutine that performs a cleanup pass every
+// interval. The loop is best-effort: errors (including retention-engine load
+// failures) are discarded and the loop falls back to default-TTL cleanup so a
+// transient rules-table problem does not stall global TTL enforcement. For
+// one-shot cleanup with error reporting, call [Store.RunCleanup] directly.
 func (s *Store) StartCleanup(ctx context.Context, ttl, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -449,37 +451,56 @@ func (s *Store) StartCleanup(ctx context.Context, ttl, interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.runCleanup(ctx, ttl)
+				engine, err := s.LoadRetentionEngine(ctx)
+				if err != nil {
+					engine = nil
+				}
+				_, _ = s.runCleanupWithEngine(ctx, ttl, engine)
 			}
 		}
 	}()
 }
 
-// runCleanup performs a single cleanup pass. Traces matching retention rules
-// use the rule's TTL; all others use the default TTL.
-func (s *Store) runCleanup(ctx context.Context, defaultTTL time.Duration) {
+// RunCleanup performs a single cleanup pass and returns the number of traces
+// deleted. Traces matching an enabled retention rule use that rule's TTL (the
+// shortest matching rule wins); all other traces use defaultTTL.
+//
+// Errors loading the retention engine, scanning candidates, or executing
+// deletes are surfaced to the caller — the public API does not silently
+// degrade to default-TTL cleanup on retention failures. Callers that want
+// best-effort cleanup should use [Store.StartCleanup] or layer their own
+// fallback on top.
+func (s *Store) RunCleanup(ctx context.Context, defaultTTL time.Duration) (int, error) {
 	engine, err := s.LoadRetentionEngine(ctx)
-	if err != nil || engine == nil {
-		// Fall back to simple default-TTL cleanup.
-		cutoff := time.Now().Add(-defaultTTL)
-		_, _ = s.db.ExecContext(ctx, "DELETE FROM error_traces WHERE created_at < ?", cutoff)
-		return
+	if err != nil {
+		return 0, fmt.Errorf("load retention engine: %w", err)
+	}
+	return s.runCleanupWithEngine(ctx, defaultTTL, engine)
+}
+
+// runCleanupWithEngine performs the cleanup pass using the supplied engine,
+// which may be nil or rule-less; in that case it falls back to a single
+// default-TTL delete. Splitting this out lets [Store.StartCleanup] retain its
+// best-effort fallback semantics without weakening the public RunCleanup
+// contract.
+func (s *Store) runCleanupWithEngine(ctx context.Context, defaultTTL time.Duration, engine *promolog.RetentionEngine) (int, error) {
+	if engine == nil || !engine.HasRules() {
+		return s.deleteOlderThan(ctx, time.Now().Add(-defaultTTL))
 	}
 
-	// If no retention rules are enabled, use the fast path.
-	if !engine.HasRules() {
-		cutoff := time.Now().Add(-defaultTTL)
-		_, _ = s.db.ExecContext(ctx, "DELETE FROM error_traces WHERE created_at < ?", cutoff)
-		return
+	// Candidate prefilter: any deletable row must be older than the shortest
+	// possible effective TTL across {defaultTTL, enabled rule TTLs}.
+	minTTL := defaultTTL
+	if rt := engine.MinTTL(); rt > 0 && rt < minTTL {
+		minTTL = rt
 	}
+	candidateCutoff := time.Now().Add(-minTTL)
 
-	// Scan all traces that are older than the shortest possible TTL.
-	// We check each trace against retention rules individually.
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT request_id, status_code, route, method, user_agent, remote_ip, user_id, created_at
-		FROM error_traces`)
+		FROM error_traces WHERE created_at < ?`, candidateCutoff)
 	if err != nil {
-		return
+		return 0, fmt.Errorf("query cleanup candidates: %w", err)
 	}
 	defer rows.Close()
 
@@ -490,7 +511,7 @@ func (s *Store) runCleanup(ctx context.Context, defaultTTL time.Duration) {
 		var statusCode int
 		var createdAt time.Time
 		if err := rows.Scan(&reqID, &statusCode, &route, &method, &userAgent, &remoteIP, &userID, &createdAt); err != nil {
-			continue
+			return 0, fmt.Errorf("scan cleanup candidate: %w", err)
 		}
 
 		fields := map[string]string{
@@ -511,11 +532,30 @@ func (s *Store) runCleanup(ctx context.Context, defaultTTL time.Duration) {
 			toDelete = append(toDelete, reqID)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate cleanup candidates: %w", err)
+	}
 	_ = rows.Close()
 
+	deleted := 0
 	for _, reqID := range toDelete {
-		_, _ = s.db.ExecContext(ctx, "DELETE FROM error_traces WHERE request_id = ?", reqID)
+		res, err := s.db.ExecContext(ctx, "DELETE FROM error_traces WHERE request_id = ?", reqID)
+		if err != nil {
+			return deleted, fmt.Errorf("delete trace %s: %w", reqID, err)
+		}
+		n, _ := res.RowsAffected()
+		deleted += int(n)
 	}
+	return deleted, nil
+}
+
+func (s *Store) deleteOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM error_traces WHERE created_at < ?", cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired traces: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }
 
 // --- Filter rules CRUD ---
