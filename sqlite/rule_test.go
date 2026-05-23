@@ -150,13 +150,13 @@ func TestLoadRuleEngine_NoRules(t *testing.T) {
 	assert.False(t, matched)
 }
 
-func TestInitSchema_FilterRulesIdempotent(t *testing.T) {
+func TestEnsureSchema_FilterRulesIdempotent(t *testing.T) {
 	db := openTestDB(t)
 	store := NewStore(db)
-	require.NoError(t, store.InitSchema())
-	require.NoError(t, store.InitSchema())
+	require.NoError(t, store.EnsureSchema())
+	require.NoError(t, store.EnsureSchema())
 
-	// Verify we can use filter_rules after double init.
+	// Verify we can use filter_rules after double ensure.
 	_, err := store.CreateRule(context.Background(), sampleRule())
 	require.NoError(t, err)
 }

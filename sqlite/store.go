@@ -73,9 +73,10 @@ func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
-// InitSchema creates the error_traces table if it doesn't exist.
-// It also applies any necessary migrations for existing databases.
-func (s *Store) InitSchema() error {
+// EnsureSchema creates the error_traces table if it doesn't exist and applies
+// any additive migrations to bring an existing database up to date. It is safe
+// to call on every startup.
+func (s *Store) EnsureSchema() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
@@ -116,6 +117,13 @@ func (s *Store) InitSchema() error {
 	}
 	return nil
 }
+
+// InitSchema is a deprecated alias for [Store.EnsureSchema]. New code should
+// call EnsureSchema directly; the name better reflects the idempotent
+// startup/migration behavior.
+//
+// Deprecated: use EnsureSchema.
+func (s *Store) InitSchema() error { return s.EnsureSchema() }
 
 // SetOnPromote registers a callback invoked after each successful promote.
 func (s *Store) SetOnPromote(fn func(promolog.TraceSummary)) {

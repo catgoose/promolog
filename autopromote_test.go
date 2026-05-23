@@ -18,7 +18,8 @@ type mockStorer struct {
 	traces []Trace
 }
 
-func (m *mockStorer) InitSchema() error                         { return nil }
+func (m *mockStorer) EnsureSchema() error                       { return nil }
+func (m *mockStorer) InitSchema() error                         { return m.EnsureSchema() }
 func (m *mockStorer) SetOnPromote(_ func(TraceSummary))         {}
 func (m *mockStorer) Get(_ context.Context, _ string) (*Trace, error) {
 	return nil, nil

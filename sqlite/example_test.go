@@ -21,7 +21,7 @@ func ExampleNewStore() {
 	db.SetMaxOpenConns(1)
 
 	store := sqlite.NewStore(db)
-	if err := store.InitSchema(); err != nil {
+	if err := store.EnsureSchema(); err != nil {
 		panic(err)
 	}
 
@@ -34,7 +34,7 @@ func ExampleStore_Promote() {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	store := sqlite.NewStore(db)
-	_ = store.InitSchema()
+	_ = store.EnsureSchema()
 
 	ctx := context.Background()
 
@@ -74,7 +74,7 @@ func ExampleStore_Get() {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	store := sqlite.NewStore(db)
-	_ = store.InitSchema()
+	_ = store.EnsureSchema()
 
 	ctx := context.Background()
 	_ = store.Promote(ctx, promolog.Trace{
@@ -110,7 +110,7 @@ func ExampleStore_ListTraces() {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	store := sqlite.NewStore(db)
-	_ = store.InitSchema()
+	_ = store.EnsureSchema()
 
 	ctx := context.Background()
 	_ = store.Promote(ctx, promolog.Trace{
@@ -153,7 +153,7 @@ func ExampleStore_AvailableFilters() {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	store := sqlite.NewStore(db)
-	_ = store.InitSchema()
+	_ = store.EnsureSchema()
 
 	ctx := context.Background()
 	_ = store.Promote(ctx, promolog.Trace{
@@ -182,7 +182,7 @@ func ExampleStore_SetOnPromote() {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	store := sqlite.NewStore(db)
-	_ = store.InitSchema()
+	_ = store.EnsureSchema()
 
 	// Register a callback for real-time notifications (SSE, webhooks, etc.).
 	store.SetOnPromote(func(ts promolog.TraceSummary) {
@@ -205,7 +205,7 @@ func ExampleStore_DeleteTrace() {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	store := sqlite.NewStore(db)
-	_ = store.InitSchema()
+	_ = store.EnsureSchema()
 
 	ctx := context.Background()
 	_ = store.Promote(ctx, promolog.Trace{

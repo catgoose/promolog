@@ -27,7 +27,7 @@ func newTestStore(t *testing.T) *Store {
 	t.Helper()
 	db := openTestDB(t)
 	store := NewStore(db)
-	require.NoError(t, store.InitSchema())
+	require.NoError(t, store.EnsureSchema())
 	return store
 }
 
@@ -383,12 +383,22 @@ func TestStartCleanup_StopsOnContextCancel(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-// --- InitSchema idempotency ---
+// --- EnsureSchema idempotency ---
 
-func TestInitSchema_Idempotent(t *testing.T) {
+func TestEnsureSchema_Idempotent(t *testing.T) {
+	db := openTestDB(t)
+	store := NewStore(db)
+	require.NoError(t, store.EnsureSchema())
+	require.NoError(t, store.EnsureSchema())
+}
+
+// TestInitSchema_AliasDelegates verifies the deprecated InitSchema alias still
+// drives the same idempotent ensure/migrate path as EnsureSchema.
+func TestInitSchema_AliasDelegates(t *testing.T) {
 	db := openTestDB(t)
 	store := NewStore(db)
 	require.NoError(t, store.InitSchema())
+	require.NoError(t, store.EnsureSchema())
 	require.NoError(t, store.InitSchema())
 }
 
