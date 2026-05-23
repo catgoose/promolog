@@ -173,7 +173,7 @@ import (
 // 1. Set up the store
 db, _ := sql.Open("sqlite3", "traces.db")
 store := sqlite.NewStore(db)
-store.InitSchema()
+store.EnsureSchema()
 store.StartCleanup(ctx, 90*24*time.Hour, time.Hour)
 
 // 2. Wrap your slog handler
@@ -590,6 +590,10 @@ type Storer interface {
     Aggregate(ctx context.Context, f AggregateFilter) ([]AggregateResult, error)
 }
 ```
+
+The SQLite store also provides `EnsureSchema()` as the preferred idempotent
+startup/migration entry point. `InitSchema()` remains available as a
+compatibility alias.
 
 ## Duplicate handling
 

@@ -262,11 +262,11 @@ func TestStartCleanup_RetentionRuleShortestTTLWins(t *testing.T) {
 
 // --- Schema idempotency ---
 
-func TestInitSchema_RetentionRulesIdempotent(t *testing.T) {
+func TestEnsureSchema_RetentionRulesIdempotent(t *testing.T) {
 	db := openTestDB(t)
 	store := NewStore(db)
-	require.NoError(t, store.InitSchema())
-	require.NoError(t, store.InitSchema())
+	require.NoError(t, store.EnsureSchema())
+	require.NoError(t, store.EnsureSchema())
 
 	_, err := store.CreateRetentionRule(context.Background(), sampleRetentionRule())
 	require.NoError(t, err)
