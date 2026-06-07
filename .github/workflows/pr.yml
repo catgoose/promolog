@@ -27,11 +27,8 @@ jobs:
           version: latest
           args: --timeout=5m
 
-      - name: Vet
-        run: go vet ./...
-
       - name: Test
-        run: go test -race ./...
+        run: make ci
 
   notify-failure:
     if: ${{ failure() }}
