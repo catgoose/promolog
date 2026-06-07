@@ -1,6 +1,6 @@
 module github.com/catgoose/promolog/sqlite
 
-go 1.26.3
+go 1.26.4
 
 require (
 	github.com/catgoose/promolog v0.2.8

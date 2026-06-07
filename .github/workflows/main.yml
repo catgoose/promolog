@@ -40,14 +40,21 @@ jobs:
 
       - name: Update dependencies
         run: |
+          go_version=$(go version | sed -n 's/.*go\([0-9.]*\).*/\1/p')
           go get -u ./...
           go mod tidy
-          go mod edit -go=$(go version | sed -n 's/.*go\([0-9.]*\).*/\1/p')
+          go mod edit -go="$go_version"
+          (
+            cd sqlite
+            go get -u ./...
+            go mod tidy
+            go mod edit -go="$go_version"
+          )
 
       - name: Check for changes
         id: check-changes
         run: |
-          git add go.mod go.sum
+          git add go.mod go.sum sqlite/go.mod sqlite/go.sum
           if git diff --staged --quiet; then
             echo "changed=false" >> $GITHUB_OUTPUT
           else
