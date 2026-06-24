@@ -68,11 +68,18 @@ type traceView struct {
 	Entries         []promolog.Entry  `json:"entries,omitempty"`
 	RequestBody     string            `json:"request_body,omitempty"`
 	ResponseBody    string            `json:"response_body,omitempty"`
+	Kind            string            `json:"kind,omitempty"`
+	OperationID     string            `json:"operation_id,omitempty"`
+	OperationName   string            `json:"operation_name,omitempty"`
+	OriginRequestID string            `json:"origin_request_id,omitempty"`
+	Status          string            `json:"status,omitempty"`
+	StartedAt       string            `json:"started_at,omitempty"`
+	DurationMS      int64             `json:"duration_ms,omitempty"`
 	CreatedAt       string            `json:"created_at"`
 }
 
 func toView(t promolog.Trace) traceView {
-	return traceView{
+	v := traceView{
 		RequestID:       t.RequestID,
 		ParentRequestID: t.ParentRequestID,
 		ErrorChain:      t.ErrorChain,
@@ -86,8 +93,18 @@ func toView(t promolog.Trace) traceView {
 		Entries:         t.Entries,
 		RequestBody:     t.RequestBody,
 		ResponseBody:    t.ResponseBody,
+		Kind:            t.Kind,
+		OperationID:     t.OperationID,
+		OperationName:   t.OperationName,
+		OriginRequestID: t.OriginRequestID,
+		Status:          t.Status,
+		DurationMS:      t.Duration.Milliseconds(),
 		CreatedAt:       t.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
+	if !t.StartedAt.IsZero() {
+		v.StartedAt = t.StartedAt.Format("2006-01-02T15:04:05Z07:00")
+	}
+	return v
 }
 
 // Export marshals the trace as JSON and writes it as a single line to the

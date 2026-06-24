@@ -152,6 +152,53 @@ func TestExport_MultipleTraces(t *testing.T) {
 	assert.Len(t, lines, 2, "should have two JSON lines")
 }
 
+func TestExport_IncludesOperationFields(t *testing.T) {
+	var buf bytes.Buffer
+	exp := jsonexport.New(&buf)
+
+	started := time.Date(2025, 1, 1, 11, 0, 0, 0, time.UTC)
+	tr := promolog.Trace{
+		Kind:            promolog.TraceKindOperation,
+		RequestID:       "op-1",
+		OperationID:     "op-1",
+		OperationName:   "sales-goals-sync",
+		OriginRequestID: "req-origin",
+		Status:          promolog.OperationStatusFailed,
+		ErrorChain:      "upstream timeout",
+		StartedAt:       started,
+		Duration:        2 * time.Second,
+		CreatedAt:       time.Date(2025, 1, 1, 11, 0, 2, 0, time.UTC),
+	}
+	require.NoError(t, exp.Export(context.Background(), tr))
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &m))
+	assert.Equal(t, "operation", m["kind"])
+	assert.Equal(t, "op-1", m["operation_id"])
+	assert.Equal(t, "sales-goals-sync", m["operation_name"])
+	assert.Equal(t, "req-origin", m["origin_request_id"])
+	assert.Equal(t, "failed", m["status"])
+	assert.Equal(t, float64(2000), m["duration_ms"])
+	assert.Equal(t, "2025-01-01T11:00:00Z", m["started_at"])
+}
+
+func TestExport_OmitsOperationFieldsForRequestTrace(t *testing.T) {
+	var buf bytes.Buffer
+	exp := jsonexport.New(&buf)
+
+	require.NoError(t, exp.Export(context.Background(), sampleTrace()))
+
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &m))
+	assert.NotContains(t, m, "kind")
+	assert.NotContains(t, m, "operation_id")
+	assert.NotContains(t, m, "operation_name")
+	assert.NotContains(t, m, "origin_request_id")
+	assert.NotContains(t, m, "status")
+	assert.NotContains(t, m, "started_at")
+	assert.NotContains(t, m, "duration_ms")
+}
+
 func TestClose(t *testing.T) {
 	var buf bytes.Buffer
 	exp := jsonexport.New(&buf)

@@ -28,9 +28,9 @@ var parentRequestIDKey = parentRequestIDKeyType{}
 
 // Entry is a single captured log record.
 type Entry struct {
-	Time    time.Time `json:"time"`
-	Level   string    `json:"level"`
-	Message string    `json:"msg"`
+	Time    time.Time         `json:"time"`
+	Level   string            `json:"level"`
+	Message string            `json:"msg"`
 	Attrs   map[string]string `json:"attrs,omitempty"`
 }
 
@@ -41,13 +41,13 @@ type Entry struct {
 // half of entries. Middle entries are dropped and replaced with a synthetic
 // entry indicating how many were elided. A limit of 0 means unlimited.
 type Buffer struct {
-	mu      sync.Mutex
-	entries []Entry
-	limit   int // 0 = unlimited
-	head    []Entry
-	tail    []Entry
-	total   int // total entries appended (only tracked when limit > 0)
-	elided  int // entries dropped from the middle
+	mu           sync.Mutex
+	entries      []Entry
+	limit        int // 0 = unlimited
+	head         []Entry
+	tail         []Entry
+	total        int // total entries appended (only tracked when limit > 0)
+	elided       int // entries dropped from the middle
 	tags         map[string]string
 	requestBody  string
 	responseBody string
@@ -209,6 +209,12 @@ func GetBuffer(ctx context.Context) *Buffer {
 
 // Trace contains all the information captured when a request is promoted.
 // ErrorChain is optional and may be empty for non-error promotions.
+//
+// The operation fields (Kind, OperationID, OperationName, OriginRequestID,
+// Status, StartedAt, Duration) are populated only for detached operation
+// traces created via StartOperation/PromoteOperation; request traces leave
+// them empty. For an operation trace, RequestID holds the operation ID so a
+// single store keys every trace the same way.
 type Trace struct {
 	RequestID       string
 	ParentRequestID string `json:"parent_request_id,omitempty"`
@@ -224,6 +230,14 @@ type Trace struct {
 	RequestBody     string `json:"request_body,omitempty"`
 	ResponseBody    string `json:"response_body,omitempty"`
 	CreatedAt       time.Time
+
+	Kind            string        `json:"kind,omitempty"`
+	OperationID     string        `json:"operation_id,omitempty"`
+	OperationName   string        `json:"operation_name,omitempty"`
+	OriginRequestID string        `json:"origin_request_id,omitempty"`
+	Status          string        `json:"status,omitempty"`
+	StartedAt       time.Time     `json:"started_at,omitzero"`
+	Duration        time.Duration `json:"duration,omitempty"`
 }
 
 // TraceSummary is a lightweight row for list views (no log entries).
@@ -238,6 +252,14 @@ type TraceSummary struct {
 	UserID          string
 	Tags            map[string]string
 	CreatedAt       time.Time
+
+	Kind            string        `json:"kind,omitempty"`
+	OperationID     string        `json:"operation_id,omitempty"`
+	OperationName   string        `json:"operation_name,omitempty"`
+	OriginRequestID string        `json:"origin_request_id,omitempty"`
+	Status          string        `json:"status,omitempty"`
+	StartedAt       time.Time     `json:"started_at,omitzero"`
+	Duration        time.Duration `json:"duration,omitempty"`
 }
 
 // TraceFilter holds all filter parameters for ListTraces.
@@ -268,8 +290,8 @@ type FilterOptions struct {
 type RetentionRule struct {
 	ID        int       `json:"id"`
 	Name      string    `json:"name"`
-	Field     string    `json:"field"`     // "route", "status_code", "method", etc.
-	Operator  string    `json:"operator"`  // "equals", "contains", "starts_with", "matches_glob"
+	Field     string    `json:"field"`    // "route", "status_code", "method", etc.
+	Operator  string    `json:"operator"` // "equals", "contains", "starts_with", "matches_glob"
 	Value     string    `json:"value"`
 	TTLHours  int       `json:"ttl_hours"` // retention period in hours
 	Enabled   bool      `json:"enabled"`

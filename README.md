@@ -330,6 +330,38 @@ Manual and automatic promotion use the same `Trace` struct and `Storer`
 interface. Use `AutoPromoteMiddleware` for policy-driven promotion, manual
 `Promote` for framework-specific error handling, or both together.
 
+### Detached operations
+
+Some failures happen in background work that outlives the HTTP request that
+started it -- a sync job, a queue consumer, a fire-and-forget goroutine.
+`StartOperation` begins a trace with its own log buffer; detach request
+cancellation with `context.WithoutCancel`, log against the operation context,
+and call `PromoteOperation` when the work finishes:
+
+```go
+func syncHandler(store promolog.Storer) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        opCtx, _ := promolog.StartOperation(r.Context(), "sales-goals-sync",
+            promolog.Attr("trigger", "manual"))
+
+        // Detach request cancellation so the work survives the response.
+        bg := context.WithoutCancel(opCtx)
+        go func() {
+            slog.InfoContext(bg, "sync started")
+            promolog.PromoteOperation(bg, store, runSync(bg))
+        }()
+
+        w.WriteHeader(http.StatusAccepted)
+    }
+}
+```
+
+Operation traces share the `Trace` struct and `Storer` with request traces.
+They set `Kind` to `"operation"` and carry an `OperationID`, `OperationName`,
+`Status`, `Duration`, and an `OriginRequestID` linking back to the request that
+started them, so a UI can tell the two apart. A nil error promotes a successful
+operation; a non-nil error records the terminal error chain and a failed status.
+
 ## Middleware stack
 
 ### Correlation
@@ -648,7 +680,12 @@ by setting `startTimeKey` via `CorrelationMiddleware`.
 | `CorrelationTransport`          | `http.RoundTripper` that propagates request IDs on outbound calls                   |
 | `NewCorrelatedClient`           | Creates an `http.Client` with request ID propagation                                |
 | `WireExporter`                  | Connects an Exporter to a store's OnPromote callback                                |
+| `StartOperation(ctx, name, ...attr)` | Begins a detached operation trace correlated to the current request          |
+| `PromoteOperation(ctx, store, err)`  | Persists the context's operation trace, recording err as the terminal error  |
+| `Attr(key, value)`              | Builds an operation attribute for `StartOperation`                                  |
+| `Operation`                     | Handle to a detached operation (exposes `ID` and `Name`)                            |
 | `ErrDuplicateTrace`             | Sentinel error for duplicate request IDs                                            |
+| `ErrNoOperation`                | Sentinel error when `PromoteOperation` finds no operation in the context           |
 
 ### SQLite store (`github.com/catgoose/promolog/sqlite`)
 

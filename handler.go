@@ -56,7 +56,7 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		}
 	}
 
-	if reqID != "" {
+	if reqID != "" || GetOperation(ctx) != nil {
 		if buf := GetBuffer(ctx); buf != nil {
 			attrs := make(map[string]string)
 			for _, a := range h.attrs {
