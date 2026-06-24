@@ -1,6 +1,6 @@
 # promolog
 
-![image](https://github.com/catgoose/screenshots/blob/main/promolog/promolog.png)
+![promolog](https://raw.githubusercontent.com/catgoose/screenshots/main/promolog/promolog.png)
 
 <!--toc:start-->
 
@@ -14,6 +14,7 @@
     - [Auto-promote middleware](#auto-promote-middleware)
     - [Runtime filter rules](#runtime-filter-rules)
     - [Manual promotion](#manual-promotion)
+    - [Detached operations](#detached-operations)
   - [Middleware stack](#middleware-stack)
     - [Correlation](#correlation)
     - [Body capture](#body-capture)
@@ -40,8 +41,6 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/catgoose/promolog.svg)](https://pkg.go.dev/github.com/catgoose/promolog)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-![promolog](https://raw.githubusercontent.com/catgoose/screenshots/main/promolog/promolog.png)
 
 Per-request log capture with policy-driven promotion for Go.
 
@@ -643,11 +642,66 @@ if errors.Is(err, promolog.ErrDuplicateTrace) {
 
 ## Testing
 
-`Storer` is an interface -- mock it in your application tests.
+Run the real SQLite store against an in-memory database -- no files, no cleanup:
 
-`SamplePolicy` accepts an optional `*rand.Rand` for deterministic test behavior.
-`LatencyPolicy` reads the start time from context, so you can control it in tests
-by setting `startTimeKey` via `CorrelationMiddleware`.
+```go
+import (
+    "context"
+    "database/sql"
+    "testing"
+
+    "github.com/catgoose/promolog"
+    "github.com/catgoose/promolog/sqlite"
+    _ "github.com/mattn/go-sqlite3"
+)
+
+func TestPromotedTrace(t *testing.T) {
+    ctx := context.Background()
+    db, err := sql.Open("sqlite3", ":memory:")
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer db.Close()
+    db.SetMaxOpenConns(1) // :memory: lives per-connection; pin to one
+
+    store := sqlite.NewStore(db)
+    if err := store.EnsureSchema(); err != nil {
+        t.Fatal(err)
+    }
+
+    want := promolog.Trace{
+        RequestID:  "req-123",
+        StatusCode: 500,
+        Route:      "/sync",
+        Method:     "POST",
+    }
+    if err := store.Promote(ctx, want); err != nil {
+        t.Fatal(err)
+    }
+
+    got, err := store.Get(ctx, want.RequestID)
+    if err != nil {
+        t.Fatal(err)
+    }
+    if got == nil {
+        t.Fatal("expected a promoted trace")
+    }
+}
+```
+
+`Storer` is a wide interface. When a test needs only a method or two, embed it
+in a stub and override those -- any unimplemented method panics if called, which
+keeps the stub honest:
+
+```go
+type stubStore struct{ promolog.Storer }
+
+func (stubStore) Promote(context.Context, promolog.Trace) error { return nil }
+```
+
+`SamplePolicy` accepts an optional `*rand.Rand` for deterministic sampling.
+`LatencyPolicy` reads the start time set by `CorrelationMiddleware`, so wrap the
+handler under test in that middleware to exercise latency-based promotion.
 
 ## API reference
 
@@ -660,7 +714,7 @@ by setting `startTimeKey` via `CorrelationMiddleware`.
 | `Handler`                       | `slog.Handler` wrapper that captures records into a per-request buffer               |
 | `NewHandler(inner, ...option)`  | Creates a Handler wrapping an existing slog handler                                  |
 | `Buffer`                        | Thread-safe per-request log buffer with optional size limits                         |
-| `Trace`                         | Full trace with entries, bodies, tags, and parent request ID                         |
+| `Trace`                         | Full trace with entries, bodies, tags, parent request ID, and optional operation metadata |
 | `TraceSummary`                  | Lightweight trace without entries (for list views)                                   |
 | `TraceFilter`                   | Query parameters for `ListTraces` and `AvailableFilters`                            |
 | `FilterOptions`                 | Distinct values for filter dropdowns (status, method, route, IP, user, tags)        |
