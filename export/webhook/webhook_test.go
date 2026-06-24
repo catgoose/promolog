@@ -146,6 +146,60 @@ func TestExport_OmitsEmptyParentRequestIDAndBodies(t *testing.T) {
 	assert.NotContains(t, received, "response_body")
 }
 
+func TestExport_IncludesOperationFields(t *testing.T) {
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tr := promolog.Trace{
+		Kind:            promolog.TraceKindOperation,
+		RequestID:       "op-1",
+		OperationID:     "op-1",
+		OperationName:   "sales-goals-sync",
+		OriginRequestID: "req-origin",
+		Status:          promolog.OperationStatusFailed,
+		ErrorChain:      "upstream timeout",
+		StartedAt:       time.Date(2025, 1, 1, 11, 0, 0, 0, time.UTC),
+		Duration:        2 * time.Second,
+		CreatedAt:       time.Date(2025, 1, 1, 11, 0, 2, 0, time.UTC),
+	}
+	exp := webhook.New(srv.URL)
+	require.NoError(t, exp.Export(context.Background(), tr))
+
+	assert.Equal(t, "operation", received["kind"])
+	assert.Equal(t, "op-1", received["operation_id"])
+	assert.Equal(t, "sales-goals-sync", received["operation_name"])
+	assert.Equal(t, "req-origin", received["origin_request_id"])
+	assert.Equal(t, "failed", received["status"])
+	assert.Equal(t, float64(2000), received["duration_ms"])
+	assert.Equal(t, "2025-01-01T11:00:00Z", received["started_at"])
+}
+
+func TestExport_OmitsOperationFieldsForRequestTrace(t *testing.T) {
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &received)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	exp := webhook.New(srv.URL)
+	require.NoError(t, exp.Export(context.Background(), sampleTrace()))
+
+	assert.NotContains(t, received, "kind")
+	assert.NotContains(t, received, "operation_id")
+	assert.NotContains(t, received, "operation_name")
+	assert.NotContains(t, received, "origin_request_id")
+	assert.NotContains(t, received, "status")
+	assert.NotContains(t, received, "started_at")
+	assert.NotContains(t, received, "duration_ms")
+}
+
 func TestWithClient(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

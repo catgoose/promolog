@@ -56,7 +56,9 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 		}
 	}
 
-	if reqID != "" {
+	op := GetOperation(ctx)
+
+	if reqID != "" || op != nil {
 		if buf := GetBuffer(ctx); buf != nil {
 			attrs := make(map[string]string)
 			for _, a := range h.attrs {
@@ -70,6 +72,10 @@ func (h *Handler) Handle(ctx context.Context, r slog.Record) error {
 				}
 				return true
 			})
+			if op != nil {
+				// Context operation ID is authoritative over any record attr.
+				attrs["operation_id"] = op.ID()
+			}
 			var entryAttrs map[string]string
 			if len(attrs) > 0 {
 				entryAttrs = attrs

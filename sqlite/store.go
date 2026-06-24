@@ -26,16 +26,38 @@ const schema = `CREATE TABLE IF NOT EXISTS error_traces (
 	user_id           VARCHAR(255),
 	entries           TEXT NOT NULL,
 	tags              TEXT,
+	kind              TEXT,
+	operation_name    TEXT,
+	origin_request_id VARCHAR(64),
+	status            TEXT,
+	started_at        TIMESTAMP,
+	duration_ms       INTEGER,
 	created_at        TIMESTAMP NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_error_traces_request_id ON error_traces(request_id);
 CREATE INDEX IF NOT EXISTS idx_error_traces_created_at ON error_traces(created_at);`
 
-const migrateAddTags = `ALTER TABLE error_traces ADD COLUMN tags TEXT`
-const migrateAddRequestBody = `ALTER TABLE error_traces ADD COLUMN request_body TEXT`
-const migrateAddResponseBody = `ALTER TABLE error_traces ADD COLUMN response_body TEXT`
-const migrateAddParentRequestID = `ALTER TABLE error_traces ADD COLUMN parent_request_id VARCHAR(64)`
-const migrateAddParentRequestIDIndex = `CREATE INDEX IF NOT EXISTS idx_error_traces_parent_request_id ON error_traces(parent_request_id)`
+// addColumnMigrations bring an existing error_traces table up to the current
+// column set. Re-running them is harmless: SQLite reports a "duplicate column"
+// error when the column already exists, which EnsureSchema ignores.
+var addColumnMigrations = []string{
+	`ALTER TABLE error_traces ADD COLUMN tags TEXT`,
+	`ALTER TABLE error_traces ADD COLUMN request_body TEXT`,
+	`ALTER TABLE error_traces ADD COLUMN response_body TEXT`,
+	`ALTER TABLE error_traces ADD COLUMN parent_request_id VARCHAR(64)`,
+	`ALTER TABLE error_traces ADD COLUMN kind TEXT`,
+	`ALTER TABLE error_traces ADD COLUMN operation_name TEXT`,
+	`ALTER TABLE error_traces ADD COLUMN origin_request_id VARCHAR(64)`,
+	`ALTER TABLE error_traces ADD COLUMN status TEXT`,
+	`ALTER TABLE error_traces ADD COLUMN started_at TIMESTAMP`,
+	`ALTER TABLE error_traces ADD COLUMN duration_ms INTEGER`,
+}
+
+var indexMigrations = []string{
+	`CREATE INDEX IF NOT EXISTS idx_error_traces_parent_request_id ON error_traces(parent_request_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_error_traces_kind ON error_traces(kind)`,
+	`CREATE INDEX IF NOT EXISTS idx_error_traces_origin_request_id ON error_traces(origin_request_id)`,
+}
 
 const retentionRulesSchema = `CREATE TABLE IF NOT EXISTS retention_rules (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,34 +102,17 @@ func (s *Store) EnsureSchema() error {
 	if _, err := s.db.Exec(schema); err != nil {
 		return err
 	}
-	// Migration: add tags column if missing (existing databases).
-	// ALTER TABLE ... ADD COLUMN is a no-op error when the column exists.
-	if _, err := s.db.Exec(migrateAddTags); err != nil {
-		// Ignore "duplicate column" errors — the column already exists.
-		if !strings.Contains(err.Error(), "duplicate column") {
-			return err
+	for _, stmt := range addColumnMigrations {
+		if _, err := s.db.Exec(stmt); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column") {
+				return err
+			}
 		}
 	}
-	// Migration: add request_body column if missing.
-	if _, err := s.db.Exec(migrateAddRequestBody); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column") {
+	for _, stmt := range indexMigrations {
+		if _, err := s.db.Exec(stmt); err != nil {
 			return err
 		}
-	}
-	// Migration: add response_body column if missing.
-	if _, err := s.db.Exec(migrateAddResponseBody); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column") {
-			return err
-		}
-	}
-	// Migration: add parent_request_id column if missing.
-	if _, err := s.db.Exec(migrateAddParentRequestID); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column") {
-			return err
-		}
-	}
-	if _, err := s.db.Exec(migrateAddParentRequestIDIndex); err != nil {
-		return err
 	}
 	if _, err := s.db.Exec(filterRulesSchema); err != nil {
 		return err
@@ -158,14 +163,29 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 	if trace.ParentRequestID != "" {
 		parentID = &trace.ParentRequestID
 	}
+	kind := nullableString(trace.Kind)
+	opName := nullableString(trace.OperationName)
+	originID := nullableString(trace.OriginRequestID)
+	status := nullableString(trace.Status)
+	var startedAt *time.Time
+	if !trace.StartedAt.IsZero() {
+		t := trace.StartedAt.UTC()
+		startedAt = &t
+	}
+	var durationMS *int64
+	if trace.Duration > 0 {
+		d := trace.Duration.Milliseconds()
+		durationMS = &d
+	}
 	res, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO error_traces
-			(request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, request_body, response_body, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, request_body, response_body, kind, operation_name, origin_request_id, status, started_at, duration_ms, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		trace.RequestID, parentID, trace.ErrorChain, trace.StatusCode,
 		trace.Route, trace.Method, trace.UserAgent,
 		trace.RemoteIP, trace.UserID, string(data),
-		tagsJSON, reqBody, respBody, createdAt,
+		tagsJSON, reqBody, respBody,
+		kind, opName, originID, status, startedAt, durationMS, createdAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert trace: %w", err)
@@ -186,23 +206,41 @@ func (s *Store) promoteAt(ctx context.Context, trace promolog.Trace, createdAt t
 			UserID:          trace.UserID,
 			Tags:            trace.Tags,
 			CreatedAt:       createdAt,
+			Kind:            trace.Kind,
+			OperationID:     trace.OperationID,
+			OperationName:   trace.OperationName,
+			OriginRequestID: trace.OriginRequestID,
+			Status:          trace.Status,
+			StartedAt:       trace.StartedAt,
+			Duration:        trace.Duration,
 		})
 	}
 	return nil
 }
 
+// nullableString returns nil for an empty string so the column stores NULL.
+func nullableString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // Get returns the full trace for a request ID, or nil if not found.
 func (s *Store) Get(ctx context.Context, requestID string) (*promolog.Trace, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, request_body, response_body, created_at
+		`SELECT request_id, parent_request_id, error_chain, status_code, route, method, user_agent, remote_ip, user_id, entries, tags, request_body, response_body, kind, operation_name, origin_request_id, status, started_at, duration_ms, created_at
 		FROM error_traces WHERE request_id = ?`, requestID)
 
 	var t promolog.Trace
 	var entriesJSON string
 	var tagsJSON, reqBody, respBody sql.NullString
-	var parentID sql.NullString
+	var parentID, kind, opName, originID, status sql.NullString
+	var startedAt sql.NullTime
+	var durationMS sql.NullInt64
 	err := row.Scan(&t.RequestID, &parentID, &t.ErrorChain, &t.StatusCode, &t.Route,
-		&t.Method, &t.UserAgent, &t.RemoteIP, &t.UserID, &entriesJSON, &tagsJSON, &reqBody, &respBody, &t.CreatedAt)
+		&t.Method, &t.UserAgent, &t.RemoteIP, &t.UserID, &entriesJSON, &tagsJSON, &reqBody, &respBody,
+		&kind, &opName, &originID, &status, &startedAt, &durationMS, &t.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -226,7 +264,42 @@ func (s *Store) Get(ctx context.Context, requestID string) (*promolog.Trace, err
 	if respBody.Valid {
 		t.ResponseBody = respBody.String
 	}
+	applyOperationFields(&t.Kind, &t.OperationID, &t.OperationName, &t.OriginRequestID,
+		&t.Status, &t.StartedAt, &t.Duration, t.RequestID, kind, opName, originID, status, startedAt, durationMS)
 	return &t, nil
+}
+
+// applyOperationFields copies the operation columns scanned from a row into the
+// destination trace fields. For an operation row, operationID mirrors the
+// request_id key so callers always have the operation's ID alongside Kind.
+func applyOperationFields(
+	dstKind, dstOperationID, dstOperationName, dstOriginID, dstStatus *string,
+	dstStartedAt *time.Time, dstDuration *time.Duration,
+	requestID string,
+	kind, opName, originID, status sql.NullString,
+	startedAt sql.NullTime, durationMS sql.NullInt64,
+) {
+	if kind.Valid {
+		*dstKind = kind.String
+	}
+	if opName.Valid {
+		*dstOperationName = opName.String
+	}
+	if originID.Valid {
+		*dstOriginID = originID.String
+	}
+	if status.Valid {
+		*dstStatus = status.String
+	}
+	if startedAt.Valid {
+		*dstStartedAt = startedAt.Time
+	}
+	if durationMS.Valid {
+		*dstDuration = time.Duration(durationMS.Int64) * time.Millisecond
+	}
+	if *dstKind == promolog.TraceKindOperation {
+		*dstOperationID = requestID
+	}
 }
 
 // ListTraces returns a page of trace summaries matching the given filters.
@@ -263,7 +336,7 @@ func (s *Store) ListTraces(ctx context.Context, f promolog.TraceFilter) ([]promo
 
 	offset := (f.Page - 1) * f.PerPage
 	dataQ := fmt.Sprintf(
-		`SELECT request_id, parent_request_id, error_chain, status_code, route, method, remote_ip, user_id, tags, created_at
+		`SELECT request_id, parent_request_id, error_chain, status_code, route, method, remote_ip, user_id, tags, kind, operation_name, origin_request_id, status, started_at, duration_ms, created_at
 		FROM error_traces%s ORDER BY %s %s LIMIT ? OFFSET ?`,
 		where, orderCol, orderDir)
 	// Use a new slice to avoid aliasing the args backing array.
@@ -281,9 +354,12 @@ func (s *Store) ListTraces(ctx context.Context, f promolog.TraceFilter) ([]promo
 	for rows.Next() {
 		var ts promolog.TraceSummary
 		var tagsJSON sql.NullString
-		var pID sql.NullString
+		var pID, kind, opName, originID, status sql.NullString
+		var startedAt sql.NullTime
+		var durationMS sql.NullInt64
 		if err := rows.Scan(&ts.RequestID, &pID, &ts.ErrorChain, &ts.StatusCode,
-			&ts.Route, &ts.Method, &ts.RemoteIP, &ts.UserID, &tagsJSON, &ts.CreatedAt); err != nil {
+			&ts.Route, &ts.Method, &ts.RemoteIP, &ts.UserID, &tagsJSON,
+			&kind, &opName, &originID, &status, &startedAt, &durationMS, &ts.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		if pID.Valid {
@@ -292,6 +368,8 @@ func (s *Store) ListTraces(ctx context.Context, f promolog.TraceFilter) ([]promo
 		if tagsJSON.Valid && tagsJSON.String != "" {
 			_ = json.Unmarshal([]byte(tagsJSON.String), &ts.Tags)
 		}
+		applyOperationFields(&ts.Kind, &ts.OperationID, &ts.OperationName, &ts.OriginRequestID,
+			&ts.Status, &ts.StartedAt, &ts.Duration, ts.RequestID, kind, opName, originID, status, startedAt, durationMS)
 		result = append(result, ts)
 	}
 	return result, total, rows.Err()
