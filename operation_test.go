@@ -55,6 +55,44 @@ func TestStartOperation_CapturesLogsWithoutRequestContext(t *testing.T) {
 	assert.Empty(t, op.originRequestID)
 }
 
+func TestStartOperation_CapturedEntriesCarryOperationID(t *testing.T) {
+	logger := slog.New(NewHandler(&discardHandler{}))
+
+	opCtx, op := StartOperation(context.Background(), "sync-job")
+	detached := context.WithoutCancel(opCtx)
+	logger.InfoContext(detached, "working", "step", "1")
+
+	entries := op.buf.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, op.ID(), entries[0].Attrs["operation_id"])
+	assert.Equal(t, "1", entries[0].Attrs["step"])
+}
+
+func TestStartOperation_ContextOperationIDOverridesRecordAttr(t *testing.T) {
+	logger := slog.New(NewHandler(&discardHandler{}))
+
+	opCtx, op := StartOperation(context.Background(), "job")
+	logger.InfoContext(opCtx, "msg", "operation_id", "bogus")
+
+	entries := op.buf.Entries()
+	require.Len(t, entries, 1)
+	assert.Equal(t, op.ID(), entries[0].Attrs["operation_id"])
+}
+
+func TestHandler_RequestEntriesHaveNoOperationID(t *testing.T) {
+	h := NewHandler(&discardHandler{})
+	ctx := context.WithValue(context.Background(), RequestIDKey, "req-1")
+	ctx = NewBufferContext(ctx)
+
+	rec := slog.NewRecord(time.Now(), slog.LevelInfo, "hi", 0)
+	require.NoError(t, h.Handle(ctx, rec))
+
+	entries := GetBuffer(ctx).Entries()
+	require.Len(t, entries, 1)
+	_, hasOpID := entries[0].Attrs["operation_id"]
+	assert.False(t, hasOpID)
+}
+
 func TestPromoteOperation_BuildsFailedOperationTrace(t *testing.T) {
 	store := &mockStorer{}
 	logger := slog.New(NewHandler(&discardHandler{}))
