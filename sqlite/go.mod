@@ -3,7 +3,7 @@ module github.com/catgoose/promolog/sqlite
 go 1.27.4
 
 require (
-	github.com/catgoose/promolog v0.2.61
+	github.com/catgoose/promolog v0.2.62
 	github.com/mattn/go-sqlite3 v1.14.37
 	github.com/stretchr/testify v1.11.1
 )
